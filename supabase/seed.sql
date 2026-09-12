@@ -1,0 +1,10 @@
+-- Phase 1 seed data.
+--
+-- Supabase Auth users cannot be safely created via plain SQL insert (auth.users
+-- requires the GoTrue service to set password hashes and identities correctly),
+-- so this file intentionally does not seed a demo account. `profiles` rows are
+-- created automatically by the `handle_new_user` trigger (see 0001_init.sql)
+-- whenever a real user signs up through Supabase Auth.
+--
+-- This is a documented scope boundary for Phase 1 — see
+-- specs/phase-1-foundation.md, "Risks and Assumptions".
