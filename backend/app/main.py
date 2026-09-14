@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import campaigns, health, leads, me, runs
+from app.routers import approvals, campaigns, health, leads, me, runs, suppression
 from app.schemas import ErrorDetail, ErrorResponse
 
 settings = get_settings()
@@ -48,3 +48,5 @@ app.include_router(me.router, prefix="/api")
 app.include_router(campaigns.router, prefix="/api")
 app.include_router(leads.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
+app.include_router(approvals.router, prefix="/api")
+app.include_router(suppression.router, prefix="/api")

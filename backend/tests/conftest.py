@@ -24,6 +24,7 @@ def _force_fixture_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "fixture")
     monkeypatch.setenv("SEARCH_PROVIDER", "fixture")
     monkeypatch.setenv("EXTRACTION_PROVIDER", "fixture")
+    monkeypatch.setenv("EMAIL_MODE", "disabled")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

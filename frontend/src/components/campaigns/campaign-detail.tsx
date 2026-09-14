@@ -8,6 +8,8 @@ import { SearchPlanList } from "@/components/campaigns/search-plan-list";
 import { ScoreWeightsForm } from "@/components/campaigns/score-weights-form";
 import { ScoreThresholdsForm } from "@/components/campaigns/score-thresholds-form";
 import { RunLimitsForm } from "@/components/campaigns/run-limits-form";
+import { SenderForm } from "@/components/campaigns/sender-form";
+import { ExportButton } from "@/components/campaigns/export-button";
 import { PlanActions } from "@/components/campaigns/plan-actions";
 import { RunProgress } from "@/components/campaigns/run-progress";
 import { EventTimeline } from "@/components/campaigns/event-timeline";
@@ -51,6 +53,7 @@ export function CampaignDetail({ initialCampaign }: { initialCampaign: CampaignR
           >
             View leads
           </Link>
+          <ExportButton campaignId={campaign.id} />
         </div>
       </div>
 
@@ -84,6 +87,13 @@ export function CampaignDetail({ initialCampaign }: { initialCampaign: CampaignR
       />
 
       <RunLimitsForm campaignId={campaign.id} limits={campaign.limits} onSaved={handleUpdated} />
+
+      <SenderForm
+        campaignId={campaign.id}
+        senderName={campaign.sender_name}
+        senderEmail={campaign.sender_email}
+        onSaved={handleUpdated}
+      />
 
       <EventTimeline campaignId={campaign.id} campaignStatus={campaign.status} />
     </div>

@@ -155,3 +155,194 @@ class TestRescore:
         )
 
         assert response.status_code == 404
+
+
+class TestLeadStatusOverride:
+    def test_manual_override_changes_status_and_reason_without_touching_score(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        needs_review = next(lead for lead in leads if lead["status"] == "needs_review")
+        original_score = needs_review["score"]
+
+        response = client.patch(
+            f"/api/leads/{needs_review['id']}/status",
+            json={"status": "qualified", "reason": "reviewed manually"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "qualified"
+        assert body["decision_reason"] == "reviewed manually"
+        assert body["score"] == original_score
+
+    def test_defaults_reason_to_manual_override(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+
+        response = client.patch(
+            f"/api/leads/{qualified['id']}/status", json={"status": "rejected"}, headers=headers
+        )
+
+        assert response.status_code == 200
+        assert response.json()["decision_reason"] == "manual_override"
+
+    def test_cross_user_is_404(self, client: TestClient, fake_supabase: FakeSupabaseClient) -> None:
+        campaign = _run_a_campaign(client, user=USER_A, brief="Find design agencies in Dubai, UAE.")
+        leads = client.get(
+            f"/api/campaigns/{campaign['id']}/leads", headers=auth_header(**USER_A)
+        ).json()["items"]
+
+        response = client.patch(
+            f"/api/leads/{leads[0]['id']}/status",
+            json={"status": "rejected"},
+            headers=auth_header(**USER_B),
+        )
+
+        assert response.status_code == 404
+
+
+class TestRegenerateOutreach:
+    def test_requires_qualified_lead(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        needs_review = next(lead for lead in leads if lead["status"] == "needs_review")
+
+        response = client.post(
+            f"/api/leads/{needs_review['id']}/regenerate-outreach", json={}, headers=headers
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "lead_not_qualified"
+
+    def test_generates_a_grounded_passing_draft_for_a_qualified_lead(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+
+        response = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach", json={}, headers=headers
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["draft"]["channel"] == "email"
+        assert body["draft"]["version"] == 1
+        assert body["draft"]["quality_status"] == "passed"
+        assert body["status"] == "pending"
+        assert body["edited"] is False
+
+    def test_version_increments_across_repeated_calls(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+
+        first = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach", json={}, headers=headers
+        ).json()
+        second = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach", json={}, headers=headers
+        ).json()
+
+        assert first["draft"]["version"] == 1
+        assert second["draft"]["version"] == 2
+
+        detail = client.get(f"/api/leads/{qualified['id']}", headers=headers).json()
+        assert {a["draft"]["version"] for a in detail["approvals"]} == {1, 2}
+
+    def test_ungroundable_fixture_ends_needs_review_after_two_attempts(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find software companies in Berlin, Germany."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+        assert "thinclaimrobotics" in qualified["company"]["domain"]
+
+        response = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach", json={}, headers=headers
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["draft"]["quality_status"] == "needs_review"
+        assert body["draft"]["evidence_refs"] == []
+
+    def test_blocked_for_a_suppressed_domain(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        headers = auth_header(**USER_A)
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(f"/api/campaigns/{campaign['id']}/leads", headers=headers).json()[
+            "items"
+        ]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+        client.post(
+            "/api/suppression", json={"domain": qualified["company"]["domain"]}, headers=headers
+        )
+
+        response = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach", json={}, headers=headers
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "domain_suppressed"
+
+    def test_cross_user_is_404(self, client: TestClient, fake_supabase: FakeSupabaseClient) -> None:
+        campaign = _run_a_campaign(
+            client, user=USER_A, brief="Find design agencies and animation studios in Dubai, UAE."
+        )
+        leads = client.get(
+            f"/api/campaigns/{campaign['id']}/leads", headers=auth_header(**USER_A)
+        ).json()["items"]
+        qualified = next(lead for lead in leads if lead["status"] == "qualified")
+
+        response = client.post(
+            f"/api/leads/{qualified['id']}/regenerate-outreach",
+            json={},
+            headers=auth_header(**USER_B),
+        )
+
+        assert response.status_code == 404

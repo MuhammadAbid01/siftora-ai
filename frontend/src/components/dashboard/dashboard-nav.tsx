@@ -29,6 +29,12 @@ export function DashboardNav({ email }: { email: string }) {
             >
               Campaigns
             </Link>
+            <Link
+              href="/dashboard/approvals"
+              className="text-sm font-medium text-slate-600 hover:text-slate-900"
+            >
+              Approvals
+            </Link>
           </nav>
         </div>
         <div className="flex items-center gap-4">

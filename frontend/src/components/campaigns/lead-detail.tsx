@@ -2,17 +2,25 @@
 
 import { useState } from "react";
 import { apiPost, ApiError } from "@/lib/api-client";
-import { leadDetailResponseSchema, type LeadDetailResponse } from "@/lib/types/api";
+import {
+  approvalResponseSchema,
+  leadDetailWithApprovalsResponseSchema,
+  type ApprovalResponse,
+  type LeadDetailWithApprovalsResponse,
+} from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
 import { LeadStatusBadge } from "@/components/campaigns/lead-status-badge";
 import { EvidenceList } from "@/components/campaigns/evidence-list";
 import { ScoreBreakdownTable } from "@/components/campaigns/score-breakdown-table";
+import { OutreachDraftCard } from "@/components/campaigns/outreach-draft-card";
 import { Button } from "@/components/ui/button";
 
-export function LeadDetail({ initialLead }: { initialLead: LeadDetailResponse }) {
+export function LeadDetail({ initialLead }: { initialLead: LeadDetailWithApprovalsResponse }) {
   const [lead, setLead] = useState(initialLead);
   const [rescoring, setRescoring] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [outreachError, setOutreachError] = useState<string | null>(null);
 
   const handleRescore = async () => {
     setRescoring(true);
@@ -25,15 +33,52 @@ export function LeadDetail({ initialLead }: { initialLead: LeadDetailResponse })
     }
 
     try {
-      const updated = await apiPost(`/api/leads/${lead.id}/rescore`, {}, leadDetailResponseSchema, {
-        accessToken,
-      });
+      const updated = await apiPost(
+        `/api/leads/${lead.id}/rescore`,
+        {},
+        leadDetailWithApprovalsResponseSchema,
+        { accessToken },
+      );
       setLead(updated);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not rescore this lead.");
     } finally {
       setRescoring(false);
     }
+  };
+
+  const handleGenerateOutreach = async () => {
+    setGenerating(true);
+    setOutreachError(null);
+    const accessToken = await getAccessToken();
+    if (!accessToken) {
+      setOutreachError("Your session has expired. Please sign in again.");
+      setGenerating(false);
+      return;
+    }
+
+    try {
+      const created = await apiPost(
+        `/api/leads/${lead.id}/regenerate-outreach`,
+        { channel: "email" },
+        approvalResponseSchema,
+        { accessToken },
+      );
+      setLead((current) => ({ ...current, approvals: [created, ...current.approvals] }));
+    } catch (err) {
+      setOutreachError(
+        err instanceof ApiError ? err.message : "Could not generate an outreach draft.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleApprovalUpdated = (updated: ApprovalResponse) => {
+    setLead((current) => ({
+      ...current,
+      approvals: current.approvals.map((a) => (a.id === updated.id ? updated : a)),
+    }));
   };
 
   return (
@@ -81,6 +126,38 @@ export function LeadDetail({ initialLead }: { initialLead: LeadDetailResponse })
 
       <ScoreBreakdownTable breakdown={lead.score_breakdown} />
       <EvidenceList evidence={lead.evidence} />
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">Outreach</h2>
+          {lead.status === "qualified" && (
+            <Button size="sm" onClick={() => void handleGenerateOutreach()} disabled={generating}>
+              {generating
+                ? "Generating..."
+                : lead.approvals.length > 0
+                  ? "Regenerate draft"
+                  : "Generate email draft"}
+            </Button>
+          )}
+        </div>
+        {lead.status !== "qualified" && (
+          <p className="text-sm text-slate-500">
+            Only qualified leads can receive outreach drafts.
+          </p>
+        )}
+        {outreachError && (
+          <p role="alert" className="text-sm text-red-600">
+            {outreachError}
+          </p>
+        )}
+        {lead.approvals.map((approval) => (
+          <OutreachDraftCard
+            key={approval.id}
+            approval={approval}
+            onUpdated={handleApprovalUpdated}
+          />
+        ))}
+      </div>
     </div>
   );
 }

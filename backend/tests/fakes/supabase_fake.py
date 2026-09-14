@@ -26,6 +26,8 @@ def _next_timestamp() -> str:
 
 _CAMPAIGN_DEFAULTS: dict[str, Any] = {
     "offer": None,
+    "sender_name": None,
+    "sender_email": None,
     "target_lead_count": 20,
     "status": "draft",
     "search_plan": None,
@@ -98,6 +100,21 @@ _TOOL_CALL_DEFAULTS: dict[str, Any] = {
     "cost_usd": None,
 }
 
+_OUTREACH_DRAFT_DEFAULTS: dict[str, Any] = {
+    "evidence_refs": [],
+}
+
+_APPROVAL_DEFAULTS: dict[str, Any] = {
+    "status": "pending",
+    "reviewer_id": None,
+    "decided_at": None,
+    "edited": False,
+}
+
+_SUPPRESSION_ENTRY_DEFAULTS: dict[str, Any] = {
+    "reason": None,
+}
+
 _TABLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "campaigns": _CAMPAIGN_DEFAULTS,
     "campaign_icp": _CAMPAIGN_ICP_DEFAULTS,
@@ -108,6 +125,9 @@ _TABLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "score_breakdowns": {},
     "agent_events": _AGENT_EVENT_DEFAULTS,
     "tool_calls": _TOOL_CALL_DEFAULTS,
+    "outreach_drafts": _OUTREACH_DRAFT_DEFAULTS,
+    "approvals": _APPROVAL_DEFAULTS,
+    "suppression_entries": _SUPPRESSION_ENTRY_DEFAULTS,
 }
 
 # The column used as this fake's in-memory dict key for each table. Tables
@@ -123,6 +143,9 @@ _TABLE_KEY_COLUMN: dict[str, str] = {
     "score_breakdowns": "id",
     "agent_events": "id",
     "tool_calls": "id",
+    "outreach_drafts": "id",
+    "approvals": "id",
+    "suppression_entries": "id",
 }
 
 # Extra columns (beyond created_at/updated_at) that get the insert-time
@@ -135,7 +158,13 @@ _NOW_DEFAULTED_EXTRA_COLUMNS: dict[str, list[str]] = {
 # update trigger in the migrations) — the fake must not invent one, or a
 # router bug that accidentally serializes a raw DB row (extra fields and
 # all) could pass against the fake but fail against real Postgres.
-_NO_UPDATED_AT_TABLES = {"lead_evidence", "score_breakdowns", "agent_events", "tool_calls"}
+_NO_UPDATED_AT_TABLES = {
+    "lead_evidence",
+    "score_breakdowns",
+    "agent_events",
+    "tool_calls",
+    "suppression_entries",
+}
 
 Op = Literal["select", "insert", "update", "delete"]
 

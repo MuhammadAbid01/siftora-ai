@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     extraction_provider: Literal["fixture", "firecrawl"] = "fixture"
     firecrawl_api_key: str | None = None
 
+    # Real sending is opt-in and disabled by default (plan.md §11/§21).
+    email_mode: Literal["disabled", "sandbox", "live"] = "disabled"
+    resend_api_key: str | None = None
+
     @field_validator("supabase_service_role_key", "supabase_jwt_secret")
     @classmethod
     def _not_blank(cls, value: str) -> str:
@@ -58,6 +62,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "firecrawl_api_key is required when extraction_provider is 'firecrawl'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _require_resend_key_when_selected(self) -> "Settings":
+        if self.email_mode == "live" and not (self.resend_api_key or "").strip():
+            raise ValueError("resend_api_key is required when email_mode is 'live'")
         return self
 
     @property

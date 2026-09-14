@@ -182,6 +182,8 @@ class CampaignCreateRequest(BaseModel):
     brief: str
     offer: str | None = None
     target_lead_count: int = 20
+    sender_name: str | None = None
+    sender_email: EmailStr | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "CampaignCreateRequest":
@@ -198,6 +200,8 @@ class CampaignUpdateRequest(BaseModel):
     brief: str | None = None
     offer: str | None = None
     target_lead_count: int | None = None
+    sender_name: str | None = None
+    sender_email: EmailStr | None = None
     icp: ICPUpdate | None = None
     score_weights: ScoreWeights | None = None
     score_thresholds: ScoreThresholds | None = None
@@ -220,6 +224,8 @@ class CampaignResponse(BaseModel):
     brief: str
     offer: str | None
     target_lead_count: int
+    sender_name: str | None = None
+    sender_email: str | None = None
     icp: ICP | None
     search_plan: list[SearchPlanQuery] | None
     score_weights: ScoreWeights
@@ -393,6 +399,10 @@ class LeadDetailResponse(BaseModel):
     decision_reason: str | None
     evidence: list[EvidenceItem]
     score_breakdown: list[ScoreBreakdownItem]
+    # Every outreach_drafts version's approval, newest first (Phase 4) — a
+    # forward reference resolved via LeadDetailResponse.model_rebuild() at
+    # the bottom of this module, since ApprovalResponse is defined later.
+    approvals: list["ApprovalResponse"] = []
     created_at: datetime
     updated_at: datetime
 
@@ -455,3 +465,152 @@ class ToolCallListResponse(BaseModel):
 
     items: list[ToolCallResponse]
     next_cursor: str | None = None
+
+
+# --- Outreach, approval, and export (Phase 4) ----------------------------
+
+OutreachChannel = Literal["email", "linkedin"]
+QualityStatus = Literal["passed", "needs_review"]
+ApprovalStatus = Literal["pending", "approved", "rejected"]
+
+
+class DraftOutreachResult(BaseModel):
+    """The structured output requested from LanguageModelProvider.draft_outreach.
+
+    Deliberately three separate, individually-required pieces (not one
+    freeform body) — deterministic code (app/outreach.py) assembles them and
+    enforces length/CTA/grounding rules; the LLM never controls the final
+    template (plan.md §3, §11).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str
+    observation: str
+    offer_line: str
+    cta: str
+    evidence_refs: list[int] = []
+
+    @model_validator(mode="after")
+    def _pieces_not_blank(self) -> "DraftOutreachResult":
+        for field in ("subject", "observation", "offer_line", "cta"):
+            if not getattr(self, field).strip():
+                raise ValueError(f"{field} must not be blank")
+        return self
+
+
+class EmailSendResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["disabled", "sandboxed", "sent"]
+    provider_message_id: str | None = None
+
+
+class RegenerateOutreachRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channel: OutreachChannel = "email"
+
+
+class OutreachDraftResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    lead_id: str
+    channel: OutreachChannel
+    subject: str
+    body: str
+    version: int
+    quality_status: QualityStatus
+    evidence_refs: list[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ApprovalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    draft: OutreachDraftResponse
+    lead_id: str
+    campaign_id: str
+    company: CompanySummary
+    lead_status: LeadStatus
+    lead_score: int
+    status: ApprovalStatus
+    reviewer_id: str | None
+    decided_at: datetime | None
+    edited: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ApprovalListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ApprovalResponse]
+    next_cursor: str | None = None
+
+
+class ApprovalDraftEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str | None = None
+    body: str | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "ApprovalDraftEditRequest":
+        if self.subject is None and self.body is None:
+            raise ValueError("at least one of subject or body must be provided")
+        return self
+
+
+class ApprovalRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
+
+
+class ApprovalSendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_email: EmailStr
+
+
+class LeadStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: LeadStatus
+    reason: str | None = None
+
+
+class SuppressionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _domain_not_blank(self) -> "SuppressionCreateRequest":
+        if not self.domain.strip():
+            raise ValueError("domain must not be blank")
+        return self
+
+
+class SuppressionEntryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    domain: str
+    reason: str | None
+    created_at: datetime
+
+
+class SuppressionListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SuppressionEntryResponse]
+    next_cursor: str | None = None
+
+
+LeadDetailResponse.model_rebuild()

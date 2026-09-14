@@ -92,6 +92,8 @@ export const campaignResponseSchema = z.object({
   brief: z.string(),
   offer: z.string().nullable(),
   target_lead_count: z.number().int(),
+  sender_name: z.string().nullable().optional(),
+  sender_email: z.string().nullable().optional(),
   icp: icpSchema.nullable(),
   search_plan: z.array(searchPlanQuerySchema).nullable(),
   score_weights: scoreWeightsSchema,
@@ -248,3 +250,80 @@ export const toolCallListResponseSchema = z.object({
   next_cursor: z.string().nullable().optional(),
 });
 export type ToolCallListResponse = z.infer<typeof toolCallListResponseSchema>;
+
+// --- Outreach, approval, and export (Phase 4) ----------------------------
+// Mirrors backend/app/schemas.py outreach/approval models — see
+// specs/phase-4-outreach.md, "Frontend" section.
+
+export const outreachChannelSchema = z.enum(["email", "linkedin"]);
+export type OutreachChannel = z.infer<typeof outreachChannelSchema>;
+
+export const qualityStatusSchema = z.enum(["passed", "needs_review"]);
+export type QualityStatus = z.infer<typeof qualityStatusSchema>;
+
+export const approvalStatusSchema = z.enum(["pending", "approved", "rejected"]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
+export const outreachDraftResponseSchema = z.object({
+  id: z.string(),
+  lead_id: z.string(),
+  channel: outreachChannelSchema,
+  subject: z.string(),
+  body: z.string(),
+  version: z.number().int(),
+  quality_status: qualityStatusSchema,
+  evidence_refs: z.array(z.number().int()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type OutreachDraftResponse = z.infer<typeof outreachDraftResponseSchema>;
+
+export const approvalResponseSchema = z.object({
+  id: z.string(),
+  draft: outreachDraftResponseSchema,
+  lead_id: z.string(),
+  campaign_id: z.string(),
+  company: companySummarySchema,
+  lead_status: leadStatusSchema,
+  lead_score: z.number().int(),
+  status: approvalStatusSchema,
+  reviewer_id: z.string().nullable(),
+  decided_at: z.string().nullable(),
+  edited: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type ApprovalResponse = z.infer<typeof approvalResponseSchema>;
+
+export const approvalListResponseSchema = z.object({
+  items: z.array(approvalResponseSchema),
+  next_cursor: z.string().nullable().optional(),
+});
+export type ApprovalListResponse = z.infer<typeof approvalListResponseSchema>;
+
+export const emailSendResultSchema = z.object({
+  status: z.enum(["disabled", "sandboxed", "sent"]),
+  provider_message_id: z.string().nullable().optional(),
+});
+export type EmailSendResult = z.infer<typeof emailSendResultSchema>;
+
+// leadDetailResponseSchema (Phase 3) gains `approvals` in Phase 4 — every
+// outreach_drafts version's approval, newest first.
+export const leadDetailWithApprovalsResponseSchema = leadDetailResponseSchema.extend({
+  approvals: z.array(approvalResponseSchema),
+});
+export type LeadDetailWithApprovalsResponse = z.infer<typeof leadDetailWithApprovalsResponseSchema>;
+
+export const suppressionEntryResponseSchema = z.object({
+  id: z.string(),
+  domain: z.string(),
+  reason: z.string().nullable(),
+  created_at: z.string(),
+});
+export type SuppressionEntryResponse = z.infer<typeof suppressionEntryResponseSchema>;
+
+export const suppressionListResponseSchema = z.object({
+  items: z.array(suppressionEntryResponseSchema),
+  next_cursor: z.string().nullable().optional(),
+});
+export type SuppressionListResponse = z.infer<typeof suppressionListResponseSchema>;

@@ -83,3 +83,9 @@ export const runLimitsFormSchema = z.object({
   max_cost_usd: z.coerce.number().min(0.01).max(50),
 });
 export type RunLimitsFormValues = z.infer<typeof runLimitsFormSchema>;
+
+export const senderFormSchema = z.object({
+  sender_name: z.string().trim().max(200).optional().or(z.literal("")),
+  sender_email: z.string().trim().email("Enter a valid email").optional().or(z.literal("")),
+});
+export type SenderFormValues = z.infer<typeof senderFormSchema>;

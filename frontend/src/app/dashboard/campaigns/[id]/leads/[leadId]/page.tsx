@@ -3,18 +3,24 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { apiGet, ApiError } from "@/lib/api-client";
-import { leadDetailResponseSchema, type LeadDetailResponse } from "@/lib/types/api";
+import {
+  leadDetailWithApprovalsResponseSchema,
+  type LeadDetailWithApprovalsResponse,
+} from "@/lib/types/api";
 import { LeadDetail } from "@/components/campaigns/lead-detail";
 
 export const metadata: Metadata = {
   title: "Lead",
 };
 
-type LoadResult = { lead: LeadDetailResponse } | { notFound: true } | { errorMessage: string };
+type LoadResult =
+  { lead: LeadDetailWithApprovalsResponse } | { notFound: true } | { errorMessage: string };
 
 async function loadLead(leadId: string, accessToken: string): Promise<LoadResult> {
   try {
-    const lead = await apiGet(`/api/leads/${leadId}`, leadDetailResponseSchema, { accessToken });
+    const lead = await apiGet(`/api/leads/${leadId}`, leadDetailWithApprovalsResponseSchema, {
+      accessToken,
+    });
     return { lead };
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {

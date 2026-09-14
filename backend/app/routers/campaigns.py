@@ -1,6 +1,9 @@
+import csv
+import io
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app import agent, database
@@ -82,6 +85,8 @@ def _row_to_response(row: dict[str, Any], icp_row: dict[str, Any] | None) -> Cam
         brief=row["brief"],
         offer=row.get("offer"),
         target_lead_count=row["target_lead_count"],
+        sender_name=row.get("sender_name"),
+        sender_email=row.get("sender_email"),
         icp=icp,
         search_plan=search_plan,
         score_weights=ScoreWeights(**row["score_weights"]),
@@ -149,6 +154,8 @@ async def create_campaign(
         brief=body.brief,
         offer=body.offer,
         target_lead_count=body.target_lead_count,
+        sender_name=body.sender_name,
+        sender_email=body.sender_email,
     )
     return _row_to_response(row, icp_row=None)
 
@@ -191,6 +198,10 @@ async def update_campaign(
         campaign_patch["offer"] = body.offer
     if body.target_lead_count is not None:
         campaign_patch["target_lead_count"] = body.target_lead_count
+    if body.sender_name is not None:
+        campaign_patch["sender_name"] = body.sender_name
+    if body.sender_email is not None:
+        campaign_patch["sender_email"] = body.sender_email
     if body.score_weights is not None:
         campaign_patch["score_weights"] = body.score_weights.model_dump()
     if body.score_thresholds is not None:
@@ -204,7 +215,13 @@ async def update_campaign(
 
     icp_patch = body.icp.model_dump(exclude_none=True) if body.icp is not None else {}
 
-    made_any_change = bool(campaign_patch) or bool(icp_patch)
+    # Sender info doesn't affect plan/research validity — only future
+    # drafts' signoff line — so it's excluded from the "does this edit
+    # require re-approval" check (specs/phase-4-outreach.md FR-18).
+    _SENDER_FIELDS = {"sender_name", "sender_email"}
+    plan_affecting_patch = {k: v for k, v in campaign_patch.items() if k not in _SENDER_FIELDS}
+
+    made_any_change = bool(plan_affecting_patch) or bool(icp_patch)
     if made_any_change and existing["status"] in _REVERT_ON_EDIT_STATUSES:
         campaign_patch["status"] = "draft"
         campaign_patch["plan_approved_at"] = None
@@ -451,3 +468,84 @@ async def get_progress(
         )
 
     return _run_row_to_response(run)
+
+
+_EXPORT_FIELDNAMES = [
+    "lead_id",
+    "company_name",
+    "domain",
+    "source_url",
+    "score",
+    "status",
+    "channel",
+    "subject",
+    "body",
+    "approved_at",
+    "reviewer_email",
+]
+
+
+def _latest_drafts_by_channel(lead_id: str) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for draft in database.list_outreach_drafts_by_lead(lead_id=lead_id):
+        channel = draft["channel"]
+        if channel not in latest or draft["version"] > latest[channel]["version"]:
+            latest[channel] = draft
+    return latest
+
+
+@router.post("/{campaign_id}/export")
+async def export_campaign_leads(
+    campaign_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> Response:
+    """CSV of every lead+channel whose latest-version draft is approved and
+    whose company domain isn't suppressed — re-checked here, not cached from
+    approval time (specs/phase-4-outreach.md FR-16).
+    """
+    _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+
+    leads, _cursor = database.list_leads(campaign_id=campaign_id, limit=1000, cursor=None)
+    companies = database.get_companies_by_ids([lead["company_id"] for lead in leads])
+
+    rows: list[dict[str, Any]] = []
+    for lead in leads:
+        company = companies[lead["company_id"]]
+        if database.is_domain_suppressed(user_id=current_user.id, domain=company["domain"]):
+            continue
+        for channel, draft in _latest_drafts_by_channel(lead["id"]).items():
+            approval = database.get_approval_by_draft(draft_id=draft["id"])
+            if approval is None or approval["status"] != "approved":
+                continue
+            rows.append(
+                {
+                    "lead_id": lead["id"],
+                    "company_name": company["name"],
+                    "domain": company["domain"],
+                    "source_url": lead["source_url"],
+                    "score": lead["score"],
+                    "status": lead["status"],
+                    "channel": channel,
+                    "subject": draft["subject"],
+                    "body": draft["body"],
+                    "approved_at": approval.get("decided_at") or "",
+                    # Only the campaign owner can ever reach this route (or
+                    # approve a draft in the first place), so the reviewer
+                    # is always the current requester in this MVP's
+                    # single-reviewer-per-campaign model.
+                    "reviewer_email": current_user.email,
+                }
+            )
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=_EXPORT_FIELDNAMES)
+    writer.writeheader()
+    writer.writerows(rows)
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="campaign-{campaign_id}-export.csv"'
+        },
+    )

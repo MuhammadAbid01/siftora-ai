@@ -6,7 +6,7 @@ adapter, so campaign-planning logic never talks to a vendor SDK directly.
 
 import json
 import re
-from typing import Protocol
+from typing import Literal, Protocol
 
 import httpx
 from pydantic import ValidationError
@@ -16,6 +16,8 @@ from app.schemas import (
     ICP,
     CompanyAnalysis,
     CriterionSignals,
+    DraftOutreachResult,
+    EmailSendResult,
     EvidenceItem,
     ExtractedPage,
     PlanExtraction,
@@ -44,6 +46,19 @@ class LanguageModelProvider(Protocol):
         page_text: str,
     ) -> CompanyAnalysis: ...
 
+    async def draft_outreach(
+        self,
+        *,
+        icp: dict,
+        offer: str | None,
+        company_name: str,
+        domain: str,
+        evidence: list[EvidenceItem],
+        channel: Literal["email", "linkedin"],
+        sender_name: str | None,
+        attempt: int = 0,
+    ) -> DraftOutreachResult: ...
+
 
 class SearchProvider(Protocol):
     async def search(
@@ -53,6 +68,10 @@ class SearchProvider(Protocol):
 
 class WebsiteExtractionProvider(Protocol):
     async def extract(self, *, url: str) -> ExtractedPage | None: ...
+
+
+class EmailProvider(Protocol):
+    async def send(self, *, to_email: str, subject: str, body: str) -> EmailSendResult: ...
 
 
 def normalize_domain(url_or_domain: str) -> str:
@@ -178,6 +197,63 @@ class FixtureLanguageModelProvider:
 
         evidence = [EvidenceItem(**item) for item in company["evidence"]]
         return CompanyAnalysis(evidence=evidence, signals=CriterionSignals(**company["signals"]))
+
+    async def draft_outreach(
+        self,
+        *,
+        icp: dict,
+        offer: str | None,
+        company_name: str,
+        domain: str,
+        evidence: list[EvidenceItem],
+        channel: Literal["email", "linkedin"],
+        sender_name: str | None,
+        attempt: int = 0,
+    ) -> DraftOutreachResult:
+        fixture_company = _FIXTURE_COMPANIES_BY_DOMAIN.get(domain)
+        ungroundable = bool(fixture_company and fixture_company.get("draft_ungroundable"))
+
+        offer_line = (
+            f"We help teams like {company_name} with {offer}."
+            if offer
+            else "We'd love to explore how we could help your team."
+        )
+        cta = "Would you be open to a quick call next week?"
+        subject = f"Quick question for {company_name}"
+
+        if ungroundable:
+            # Deterministic "can't ground this" path — always fails
+            # regardless of attempt, so the regenerate-once-then-needs_review
+            # path (specs/phase-4-outreach.md FR-5/FR-8) is reachable without
+            # relying on real model non-determinism.
+            return DraftOutreachResult(
+                subject=subject,
+                observation="We came across your company online.",
+                offer_line=offer_line,
+                cta=cta,
+                evidence_refs=[],
+            )
+
+        groundable_index = next(
+            (i for i, item in enumerate(evidence) if item.type in ("fact", "inference")),
+            None,
+        )
+        if groundable_index is None:
+            return DraftOutreachResult(
+                subject=subject,
+                observation="We came across your company online.",
+                offer_line=offer_line,
+                cta=cta,
+                evidence_refs=[],
+            )
+
+        return DraftOutreachResult(
+            subject=subject,
+            observation=evidence[groundable_index].claim,
+            offer_line=offer_line,
+            cta=cta,
+            evidence_refs=[groundable_index],
+        )
 
 
 # --- Fixture search + extraction catalog --------------------------------
@@ -308,6 +384,41 @@ _FIXTURE_COMPANIES: list[dict] = [
         "evidence": [],
     },
     {
+        "company_name": "Thinclaim Robotics",
+        "domain": "thinclaimrobotics.example",
+        "keywords": ["software", "berlin"],
+        "broken": False,
+        "thin": False,
+        "draft_ungroundable": True,
+        "page_text": (
+            "Thinclaim Robotics is a software company based in Berlin, Germany, with 30 "
+            "employees. The team recently launched a new product line and is actively hiring "
+            "engineers."
+        ),
+        "signals": {
+            "industry_fit": 1.0,
+            "geography_fit": 1.0,
+            "company_size_fit": 0.9,
+            "pain_point_evidence": 0.9,
+            "buying_signal": 0.8,
+            "contact_relevance": 0.6,
+            "recency": 0.9,
+            "evidence_completeness": 0.9,
+        },
+        "evidence": [
+            {
+                "type": "fact",
+                "claim": "Thinclaim Robotics has 30 employees and is based in Berlin, Germany.",
+                "excerpt": (
+                    "Thinclaim Robotics is a software company based in Berlin, Germany, "
+                    "with 30 employees."
+                ),
+                "source_url": "https://thinclaimrobotics.example",
+                "confidence": 0.9,
+            },
+        ],
+    },
+    {
         "company_name": "Harbor & Co. Consulting",
         "domain": "harborconsulting.example",
         "keywords": ["consulting", "london"],
@@ -421,6 +532,18 @@ _GEMINI_RESPONSE_SCHEMA = {
         },
     },
     "required": ["icp", "search_plan"],
+}
+
+_GEMINI_DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "observation": {"type": "string"},
+        "offer_line": {"type": "string"},
+        "cta": {"type": "string"},
+        "evidence_refs": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["subject", "observation", "offer_line", "cta", "evidence_refs"],
 }
 
 _GEMINI_ANALYSIS_SCHEMA = {
@@ -569,6 +692,71 @@ class GeminiLanguageModelProvider:
         ) as exc:
             raise LLMOutputError(f"Gemini analysis response could not be parsed: {exc}") from exc
 
+    async def draft_outreach(
+        self,
+        *,
+        icp: dict,
+        offer: str | None,
+        company_name: str,
+        domain: str,
+        evidence: list[EvidenceItem],
+        channel: Literal["email", "linkedin"],
+        sender_name: str | None,
+        attempt: int = 0,
+    ) -> DraftOutreachResult:
+        indexed_evidence = "\n".join(
+            f"[{i}] ({item.type}) {item.claim}"
+            + (f" — excerpt: {item.excerpt}" if item.excerpt else "")
+            for i, item in enumerate(evidence)
+        )
+        prompt = (
+            f"Draft a short cold {channel} outreach message to {company_name} ({domain}) "
+            "as three separate pieces — do not write a full email, only these pieces:\n"
+            "- subject: a short subject line\n"
+            "- observation: ONE specific, genuine observation about this company, grounded "
+            "in one of the numbered evidence items below — do not state anything not "
+            "supported by an evidence item\n"
+            "- offer_line: ONE sentence connecting the observation to the sender's offer\n"
+            "- cta: ONE clear call to action\n"
+            "- evidence_refs: the index number(s) of the evidence item(s) that support "
+            "`observation`. If nothing below genuinely supports a specific observation, "
+            "return an empty list rather than guessing.\n\n"
+            f"Evidence:\n{indexed_evidence or '(none)'}\n\n"
+            f"Sender: {sender_name or '(not specified)'}\n"
+            f"Offer: {offer or '(not specified)'}\n"
+            f"ICP: {json.dumps(icp)}\n"
+            f"Attempt: {attempt}"
+        )
+
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self._model}:generateContent?key={self._api_key}"
+        )
+        body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseSchema": _GEMINI_DRAFT_SCHEMA,
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(endpoint, json=body)
+                response.raise_for_status()
+                payload = response.json()
+                text = payload["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = json.loads(text)
+                return DraftOutreachResult.model_validate(parsed)
+        except (
+            httpx.HTTPError,
+            KeyError,
+            IndexError,
+            json.JSONDecodeError,
+            ValidationError,
+        ) as exc:
+            raise LLMOutputError(f"Gemini draft response could not be parsed: {exc}") from exc
+
 
 def get_language_model_provider(settings: Settings | None = None) -> LanguageModelProvider:
     settings = settings or get_settings()
@@ -670,3 +858,61 @@ def get_extraction_provider(settings: Settings | None = None) -> WebsiteExtracti
         assert settings.firecrawl_api_key  # guaranteed by Settings validation
         return FirecrawlExtractionProvider(api_key=settings.firecrawl_api_key)
     return FixtureWebsiteExtractionProvider()
+
+
+# --- Email adapters (Phase 4; plan.md §5's fourth required interface) ---
+#
+# Real sending is opt-in and disabled by default (plan.md §11/§21) — see
+# specs/phase-4-outreach.md FR-17. `disabled`/`sandbox` never make a network
+# call; only `live` (Resend) does.
+
+
+class DisabledEmailProvider:
+    """Default adapter: makes no network call, sends nothing."""
+
+    async def send(self, *, to_email: str, subject: str, body: str) -> EmailSendResult:
+        return EmailSendResult(status="disabled")
+
+
+class SandboxEmailProvider:
+    """Simulates a send with no network call — for demoing the "would have
+    sent" path without configuring a real provider.
+    """
+
+    async def send(self, *, to_email: str, subject: str, body: str) -> EmailSendResult:
+        return EmailSendResult(status="sandboxed")
+
+
+class ResendEmailProvider:
+    """Real Resend-backed adapter. Opt-in; not live-tested in this
+    environment — see specs/phase-4-outreach.md, Risks and Assumptions.
+    """
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    async def send(self, *, to_email: str, subject: str, body: str) -> EmailSendResult:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "from": "onboarding@resend.dev",
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": body,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        return EmailSendResult(status="sent", provider_message_id=payload.get("id"))
+
+
+def get_email_provider(settings: Settings | None = None) -> EmailProvider:
+    settings = settings or get_settings()
+    if settings.email_mode == "live":
+        assert settings.resend_api_key  # guaranteed by Settings validation
+        return ResendEmailProvider(api_key=settings.resend_api_key)
+    if settings.email_mode == "sandbox":
+        return SandboxEmailProvider()
+    return DisabledEmailProvider()

@@ -11,13 +11,20 @@ is always the default.
 | `LanguageModelProvider` | `LLM_PROVIDER` | `FixtureLanguageModelProvider` | `GeminiLanguageModelProvider` | `GEMINI_API_KEY` |
 | `SearchProvider` | `SEARCH_PROVIDER` | `FixtureSearchProvider` | `TavilySearchProvider` | `TAVILY_API_KEY` |
 | `WebsiteExtractionProvider` | `EXTRACTION_PROVIDER` | `FixtureWebsiteExtractionProvider` | `FirecrawlExtractionProvider` | `FIRECRAWL_API_KEY` |
+| `EmailProvider` | `EMAIL_MODE` (`disabled`/`sandbox`/`live`) | `DisabledEmailProvider` (`disabled`, default) | `ResendEmailProvider` (`live`) | `RESEND_API_KEY` |
 
-All three factories live in `backend/app/providers.py`
+`EmailProvider` has a third, non-fixture no-op mode — `sandbox`
+(`SandboxEmailProvider`) — between `disabled` and `live`: it simulates a
+send (no network call, no credentials) for demoing the "would have sent"
+path, whereas `disabled` doesn't even pretend to.
+
+All factories live in `backend/app/providers.py`
 (`get_language_model_provider`, `get_search_provider`,
-`get_extraction_provider`). Routers and the research graph
-(`backend/app/agent.py`) depend on the factory, never on a concrete class.
+`get_extraction_provider`, `get_email_provider`). Routers and the research
+graph (`backend/app/agent.py`) depend on the factory, never on a concrete
+class.
 
-## Fixture behavior (Phase 2 + 3)
+## Fixture behavior (Phases 2–4)
 
 - `FixtureLanguageModelProvider.generate_campaign_plan` — keyword-matches
   the brief against a small industry/location vocabulary; returns an
@@ -44,16 +51,25 @@ dedup, rejection, scoring) deterministically testable without any
 credentials or network access. See `backend/app/providers.py` for the full
 catalog.
 
+- `FixtureLanguageModelProvider.draft_outreach` (Phase 4) — grounds the
+  observation in the first `fact`/`inference` item of the **caller-supplied**
+  evidence list (never a fixture-only re-derivation); one catalog company
+  (`thinclaimrobotics.example`, `draft_ungroundable: True`) always returns
+  an empty `evidence_refs` regardless of attempt, so the "regenerate once,
+  then require review" quality-check path is deterministically testable.
+
 ## Real adapters — not exercised live
 
-`GeminiLanguageModelProvider`, `TavilySearchProvider`, and
-`FirecrawlExtractionProvider` are implemented against each provider's
-documented REST API shape, but **no live call has been made in this
-development environment** — no API keys are available here. Anyone running
-Siftora with real credentials is the first to actually exercise these
-code paths end-to-end; if a provider's API shape has changed since this was
-written, expect to need small adjustments (matches the same caveat already
-noted for `GeminiLanguageModelProvider` in `specs/phase-2-campaigns.md`).
+`ResendEmailProvider` is implemented against Resend's documented REST API
+shape, but **no live call has been made in this development environment** —
+no `RESEND_API_KEY` is available here. `GeminiLanguageModelProvider`,
+`TavilySearchProvider`, and `FirecrawlExtractionProvider` *have* since been
+verified live against real credentials (see `specs/phase-2-campaigns.md`
+and `specs/phase-3-research.md`, Risks and Assumptions) — this caveat now
+applies only to `ResendEmailProvider`. Anyone running Siftora with a real
+Resend key is the first to exercise that specific code path end-to-end; if
+Resend's API shape has changed since this was written, expect to need small
+adjustments.
 
 ## Cost estimates are synthetic
 

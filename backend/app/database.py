@@ -19,10 +19,19 @@ LEAD_EVIDENCE_TABLE = "lead_evidence"
 SCORE_BREAKDOWNS_TABLE = "score_breakdowns"
 AGENT_EVENTS_TABLE = "agent_events"
 TOOL_CALLS_TABLE = "tool_calls"
+OUTREACH_DRAFTS_TABLE = "outreach_drafts"
+APPROVALS_TABLE = "approvals"
+SUPPRESSION_ENTRIES_TABLE = "suppression_entries"
 
 
 def create_campaign(
-    *, user_id: str, brief: str, offer: str | None, target_lead_count: int
+    *,
+    user_id: str,
+    brief: str,
+    offer: str | None,
+    target_lead_count: int,
+    sender_name: str | None = None,
+    sender_email: str | None = None,
 ) -> dict[str, Any]:
     client = get_supabase_admin_client()
     result = (
@@ -33,6 +42,8 @@ def create_campaign(
                 "brief": brief,
                 "offer": offer,
                 "target_lead_count": target_lead_count,
+                "sender_name": sender_name,
+                "sender_email": sender_email,
             }
         )
         .execute()
@@ -454,3 +465,216 @@ def list_tool_calls(
     rows = query.execute().data or []
     next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
     return rows, next_cursor
+
+
+# --- Outreach drafts + approvals (Phase 4) -------------------------------
+
+
+def list_outreach_drafts_by_lead(*, lead_id: str) -> list[dict[str, Any]]:
+    """All versions across both channels, newest first."""
+    client = get_supabase_admin_client()
+    result = (
+        client.table(OUTREACH_DRAFTS_TABLE)
+        .select("*")
+        .eq("lead_id", lead_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+def get_next_draft_version(*, lead_id: str, channel: str) -> int:
+    existing = [
+        row for row in list_outreach_drafts_by_lead(lead_id=lead_id) if row["channel"] == channel
+    ]
+    if not existing:
+        return 1
+    return max(row["version"] for row in existing) + 1
+
+
+def create_outreach_draft(
+    *,
+    lead_id: str,
+    channel: str,
+    subject: str,
+    body: str,
+    version: int,
+    quality_status: str,
+    evidence_refs: list[int],
+) -> dict[str, Any]:
+    client = get_supabase_admin_client()
+    result = (
+        client.table(OUTREACH_DRAFTS_TABLE)
+        .insert(
+            {
+                "lead_id": lead_id,
+                "channel": channel,
+                "subject": subject,
+                "body": body,
+                "version": version,
+                "quality_status": quality_status,
+                "evidence_refs": evidence_refs,
+            }
+        )
+        .execute()
+    )
+    return result.data[0]
+
+
+def get_outreach_draft(*, draft_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(OUTREACH_DRAFTS_TABLE).select("*").eq("id", draft_id).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def update_outreach_draft(*, draft_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(OUTREACH_DRAFTS_TABLE).update(patch).eq("id", draft_id).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def create_approval(*, draft_id: str) -> dict[str, Any]:
+    client = get_supabase_admin_client()
+    result = client.table(APPROVALS_TABLE).insert({"draft_id": draft_id}).execute()
+    return result.data[0]
+
+
+def get_approval(*, approval_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(APPROVALS_TABLE).select("*").eq("id", approval_id).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def get_approval_by_draft(*, draft_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(APPROVALS_TABLE).select("*").eq("draft_id", draft_id).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def update_approval(*, approval_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(APPROVALS_TABLE).update(patch).eq("id", approval_id).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def list_approvals_for_user(
+    *, user_id: str, limit: int, cursor: str | None, status: str | None
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Cross-campaign approval queue (FR-11). No SQL joins are used anywhere
+    in this codebase's repository layer (see get_companies_by_ids et al.) —
+    ownership is established by fetching the user's own campaign/lead ids
+    first, then filtering drafts/approvals by those ids in Python, exactly
+    like every other multi-table read here.
+    """
+    client = get_supabase_admin_client()
+    campaign_rows = client.table(CAMPAIGNS_TABLE).select("id").eq("user_id", user_id).execute()
+    campaign_ids = [row["id"] for row in campaign_rows.data or []]
+    if not campaign_ids:
+        return [], None
+
+    lead_rows = client.table(LEADS_TABLE).select("id").in_("campaign_id", campaign_ids).execute()
+    lead_ids = [row["id"] for row in lead_rows.data or []]
+    if not lead_ids:
+        return [], None
+
+    draft_rows = client.table(OUTREACH_DRAFTS_TABLE).select("id").in_("lead_id", lead_ids).execute()
+    draft_ids = [row["id"] for row in draft_rows.data or []]
+    if not draft_ids:
+        return [], None
+
+    query = client.table(APPROVALS_TABLE).select("*").in_("draft_id", draft_ids)
+    if status:
+        query = query.eq("status", status)
+    query = query.order("created_at", desc=True).limit(limit)
+    if cursor:
+        query = query.lt("created_at", cursor)
+
+    rows = query.execute().data or []
+    next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
+    return rows, next_cursor
+
+
+# --- Suppression entries (Phase 4) ---------------------------------------
+
+
+def get_suppression_entry_by_domain(*, user_id: str, domain: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = (
+        client.table(SUPPRESSION_ENTRIES_TABLE)
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("domain", domain)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def is_domain_suppressed(*, user_id: str, domain: str) -> bool:
+    return get_suppression_entry_by_domain(user_id=user_id, domain=domain) is not None
+
+
+def create_suppression_entry(*, user_id: str, domain: str, reason: str | None) -> dict[str, Any]:
+    """Idempotent: adding an already-suppressed domain returns the existing
+    row rather than raising a unique-constraint error.
+    """
+    existing = get_suppression_entry_by_domain(user_id=user_id, domain=domain)
+    if existing is not None:
+        return existing
+    client = get_supabase_admin_client()
+    result = (
+        client.table(SUPPRESSION_ENTRIES_TABLE)
+        .insert({"user_id": user_id, "domain": domain, "reason": reason})
+        .execute()
+    )
+    return result.data[0]
+
+
+def list_suppression_entries(
+    *, user_id: str, limit: int, cursor: str | None
+) -> tuple[list[dict[str, Any]], str | None]:
+    client = get_supabase_admin_client()
+    query = (
+        client.table(SUPPRESSION_ENTRIES_TABLE)
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+    )
+    if cursor:
+        query = query.lt("created_at", cursor)
+    rows = query.execute().data or []
+    next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
+    return rows, next_cursor
+
+
+def get_suppression_entry(*, user_id: str, entry_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = (
+        client.table(SUPPRESSION_ENTRIES_TABLE)
+        .select("*")
+        .eq("id", entry_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def delete_suppression_entry(*, user_id: str, entry_id: str) -> bool:
+    client = get_supabase_admin_client()
+    result = (
+        client.table(SUPPRESSION_ENTRIES_TABLE)
+        .delete()
+        .eq("id", entry_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return bool(result.data)
