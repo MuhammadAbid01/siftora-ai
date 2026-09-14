@@ -99,6 +99,30 @@ class TestConfirmPlan:
         assert body["status"] == "plan_approved"
         assert body["plan_approved_at"] is not None
 
+    def test_fails_when_icp_is_complete_but_no_search_plan_was_ever_generated(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        # Reproduces a real bug: a user can hand-fill ICP fields (after an
+        # icp_incomplete /plan response) via PATCH without ever calling
+        # /plan again, leaving search_plan null. confirm-plan must catch
+        # this — approving it would let /run start with nothing to search
+        # for.
+        headers = auth_header(**USER)
+        created = _create_campaign(client, "Find some good companies for our product.")
+        client.post(
+            f"/api/campaigns/{created['id']}/plan", headers=headers
+        )  # icp_incomplete, search_plan stays null
+        client.patch(
+            f"/api/campaigns/{created['id']}",
+            json={"icp": {"industries": ["Design agencies"], "locations": ["Dubai, UAE"]}},
+            headers=headers,
+        )
+
+        response = client.post(f"/api/campaigns/{created['id']}/confirm-plan", headers=headers)
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "plan_incomplete"
+
 
 class TestRunGating:
     def test_run_fails_before_approval(

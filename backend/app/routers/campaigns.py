@@ -1,9 +1,9 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import ValidationError
 
-from app import database
+from app import agent, database
 from app.config import Settings, get_settings
 from app.deps import CurrentUser, get_current_user
 from app.providers import LanguageModelProvider, LLMOutputError, get_language_model_provider
@@ -12,6 +12,7 @@ from app.schemas import (
     CampaignCreateRequest,
     CampaignListResponse,
     CampaignResponse,
+    CampaignRunResponse,
     CampaignUpdateRequest,
     DeleteResponse,
     RunLimits,
@@ -22,13 +23,40 @@ from app.schemas import (
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
-_APPROVED_STATUSES = {"plan_approved", "queued"}
+# Editing one of these reverts the campaign to `draft` (Phase 2 behavior,
+# extended to `completed`/`failed` — re-running after a finished run
+# requires re-approval too, same as a first-time run).
+_REVERT_ON_EDIT_STATUSES = {"plan_approved", "completed", "failed"}
+# A run is queued/in-flight/paused for these — editing would change config
+# out from under it (plan.md §10, "immutable for a run"). See
+# specs/phase-3-research.md FR-2 for why this differs from Phase 2, which
+# put `queued` in the revert set above instead.
+_BLOCKED_FROM_EDIT_STATUSES = {"queued", "running", "paused"}
 
 
 def _not_found() -> HTTPException:
     return HTTPException(
         status_code=404, detail={"code": "campaign_not_found", "message": "Campaign not found."}
     )
+
+
+def _reject_if_run_active(campaign: dict[str, Any]) -> None:
+    """Blocks any mutation (edit, regenerate/confirm plan, delete) while a
+    run is queued/running/paused (FR-2) — not just PATCH. Regenerating the
+    plan or deleting the campaign out from under an active run would corrupt
+    the displayed status or orphan the run's writes.
+    """
+    if campaign["status"] in _BLOCKED_FROM_EDIT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "campaign_running",
+                "message": (
+                    "This campaign has an active run. Pause it (or wait for it to "
+                    "finish) before making changes."
+                ),
+            },
+        )
 
 
 def _row_to_response(row: dict[str, Any], icp_row: dict[str, Any] | None) -> CampaignResponse:
@@ -71,6 +99,37 @@ def _row_to_response(row: dict[str, Any], icp_row: dict[str, Any] | None) -> Cam
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _run_row_to_response(row: dict[str, Any]) -> CampaignRunResponse:
+    return CampaignRunResponse(
+        id=row["id"],
+        campaign_id=row["campaign_id"],
+        status=row["status"],
+        stop_reason=row.get("stop_reason"),
+        queries_used=row["queries_used"],
+        leads_created=row["leads_created"],
+        qualified_count=row["qualified_count"],
+        needs_review_count=row["needs_review_count"],
+        rejected_count=row["rejected_count"],
+        failed_count=row["failed_count"],
+        estimated_cost_usd=float(row["estimated_cost_usd"]),
+        error=row.get("error"),
+        started_at=row["started_at"],
+        completed_at=row.get("completed_at"),
+    )
+
+
+def _icp_row_to_dict(icp_row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "industries": icp_row.get("industries") or [],
+        "locations": icp_row.get("locations") or [],
+        "company_size_min": icp_row.get("company_size_min"),
+        "company_size_max": icp_row.get("company_size_max"),
+        "signals": icp_row.get("signals") or [],
+        "exclusions": icp_row.get("exclusions") or [],
+        "target_roles": icp_row.get("target_roles") or [],
+    }
 
 
 def _get_owned_campaign_or_404(*, user_id: str, campaign_id: str) -> dict[str, Any]:
@@ -123,6 +182,7 @@ async def update_campaign(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> CampaignResponse:
     existing = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    _reject_if_run_active(existing)
 
     campaign_patch: dict[str, Any] = {}
     if body.brief is not None:
@@ -145,7 +205,7 @@ async def update_campaign(
     icp_patch = body.icp.model_dump(exclude_none=True) if body.icp is not None else {}
 
     made_any_change = bool(campaign_patch) or bool(icp_patch)
-    if made_any_change and existing["status"] in _APPROVED_STATUSES:
+    if made_any_change and existing["status"] in _REVERT_ON_EDIT_STATUSES:
         campaign_patch["status"] = "draft"
         campaign_patch["plan_approved_at"] = None
 
@@ -167,7 +227,8 @@ async def delete_campaign(
     campaign_id: str,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> DeleteResponse:
-    _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    existing = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    _reject_if_run_active(existing)
     database.delete_campaign(user_id=current_user.id, campaign_id=campaign_id)
     return DeleteResponse(deleted=True)
 
@@ -180,6 +241,7 @@ async def generate_plan(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> CampaignResponse:
     campaign = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    _reject_if_run_active(campaign)
 
     extraction = None
     last_error: Exception | None = None
@@ -251,17 +313,27 @@ async def confirm_plan(
     campaign_id: str,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> CampaignResponse:
-    _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    campaign = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    _reject_if_run_active(campaign)
     icp_row = database.get_icp(campaign_id=campaign_id)
 
-    if not icp_row or not icp_row.get("industries") or not icp_row.get("locations"):
+    icp_incomplete = not icp_row or not icp_row.get("industries") or not icp_row.get("locations")
+    # A campaign can reach a complete ICP without ever regenerating a
+    # search_plan — e.g. a user manually fills in the missing ICP fields
+    # after an `icp_incomplete` /plan response (FR-20, Phase 2) without
+    # calling /plan again. Approving that would let /run start with nothing
+    # to search for (queries_used stays 0, zero leads, silently) — so both
+    # must be checked, not just the ICP.
+    search_plan_missing = not campaign.get("search_plan")
+
+    if icp_incomplete or search_plan_missing:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "plan_incomplete",
                 "message": (
-                    "Generate a complete plan (with at least one industry and one "
-                    "location) before approving it."
+                    "Generate a complete plan (with at least one industry, one "
+                    "location, and a search plan) before approving it."
                 ),
             },
         )
@@ -281,8 +353,15 @@ async def confirm_plan(
 async def run_campaign(
     campaign_id: str,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
 ) -> CampaignResponse:
     campaign = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+
+    # Idempotent (FR-3): a run already queued/running is returned as-is,
+    # never duplicated.
+    if database.get_active_campaign_run(campaign_id=campaign_id) is not None:
+        icp_row = database.get_icp(campaign_id=campaign_id)
+        return _row_to_response(campaign, icp_row)
 
     if campaign["status"] != "plan_approved":
         raise HTTPException(
@@ -293,11 +372,82 @@ async def run_campaign(
             },
         )
 
+    icp_row = database.get_icp(campaign_id=campaign_id)
+    assert icp_row is not None  # guaranteed complete by confirm-plan (FR-15)
+
+    config_snapshot = {
+        "score_weights": campaign["score_weights"],
+        "score_threshold_qualified": campaign["score_threshold_qualified"],
+        "score_threshold_needs_review": campaign["score_threshold_needs_review"],
+        "limit_max_queries": campaign["limit_max_queries"],
+        "limit_max_pages_per_company": campaign["limit_max_pages_per_company"],
+        "limit_max_retries": campaign["limit_max_retries"],
+        "limit_max_cost_usd": float(campaign["limit_max_cost_usd"]),
+        "target_lead_count": campaign["target_lead_count"],
+    }
+    run = database.create_campaign_run(campaign_id=campaign_id, config_snapshot=config_snapshot)
     database.update_campaign(
         user_id=current_user.id, campaign_id=campaign_id, patch={"status": "queued"}
     )
 
+    state = agent.build_initial_state(
+        run_id=run["id"],
+        campaign_id=campaign_id,
+        icp=_icp_row_to_dict(icp_row),
+        offer=campaign.get("offer"),
+        search_plan=campaign.get("search_plan") or [],
+        weights=campaign["score_weights"],
+        thresholds={
+            "qualified_min": campaign["score_threshold_qualified"],
+            "needs_review_min": campaign["score_threshold_needs_review"],
+        },
+        limits={
+            "max_queries": campaign["limit_max_queries"],
+            "max_pages_per_company": campaign["limit_max_pages_per_company"],
+            "max_retries": campaign["limit_max_retries"],
+            "max_cost_usd": float(campaign["limit_max_cost_usd"]),
+        },
+        target_lead_count=campaign["target_lead_count"],
+    )
+    background_tasks.add_task(agent.run_research, state)
+
     updated_row = database.get_campaign(user_id=current_user.id, campaign_id=campaign_id)
     assert updated_row is not None
-    icp_row = database.get_icp(campaign_id=campaign_id)
     return _row_to_response(updated_row, icp_row)
+
+
+@router.post("/{campaign_id}/pause", response_model=CampaignResponse)
+async def pause_campaign(
+    campaign_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CampaignResponse:
+    campaign = _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    active_run = database.get_active_campaign_run(campaign_id=campaign_id)
+
+    if active_run is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "no_active_run", "message": "There is no active run to pause."},
+        )
+
+    database.update_campaign_run(run_id=active_run["id"], patch={"pause_requested": True})
+
+    icp_row = database.get_icp(campaign_id=campaign_id)
+    return _row_to_response(campaign, icp_row)
+
+
+@router.get("/{campaign_id}/progress", response_model=CampaignRunResponse)
+async def get_progress(
+    campaign_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CampaignRunResponse:
+    _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+    run = database.get_latest_campaign_run(campaign_id=campaign_id)
+
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_run_yet", "message": "This campaign has not been run yet."},
+        )
+
+    return _run_row_to_response(run)

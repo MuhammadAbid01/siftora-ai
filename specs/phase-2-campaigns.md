@@ -377,7 +377,10 @@ created_at, updated_at), `CampaignListResponse` (items + next_cursor),
   `campaign_icp`, RLS policies, triggers.
 - New env vars (backend, all optional with safe defaults):
   `LLM_PROVIDER` (default `fixture`), `GEMINI_API_KEY` (required only if
-  `LLM_PROVIDER=gemini`), `GEMINI_MODEL` (default `gemini-2.5-flash`).
+  `LLM_PROVIDER=gemini`), `GEMINI_MODEL` (default `gemini-3.6-flash` —
+  updated from the original `gemini-2.5-flash` default after live testing
+  in September 2026 showed Google had deprecated that model for new API
+  keys; see Risks).
 - No changes to `profiles` or Phase 1 auth flows.
 
 ---
@@ -510,17 +513,22 @@ Directly from `plan.md` §16:
   against an in-memory fake Supabase client with realistic filter/ownership
   semantics, not a real database — migration correctness is reviewed
   manually, not executed.
-- **Assumption:** no Gemini API key is available in this environment.
-  `GeminiLanguageModelProvider` is implemented against the documented
-  Gemini structured-output API shape but has never made a live call here.
-  `LLM_PROVIDER` defaults to `fixture` specifically so the product is fully
-  functional and demo-able without this risk ever being on the critical
-  path; enabling live Gemini is a deployment-time decision for whoever runs
-  this with real credentials.
-- **Assumption:** `GEMINI_MODEL` defaults to `gemini-2.5-flash`. Model
-  availability/naming on Google's side can change after this was written;
-  documented as configurable via env var specifically so a stale default
-  doesn't require a code change.
+- **Update (verified live, September 2026):** the user supplied a real
+  `GEMINI_API_KEY` and the assumption above was tested. `GeminiLanguageModelProvider`'s
+  request shape (`generateContent` + `responseMimeType: application/json`
+  + `responseSchema`) works correctly as originally written — but the
+  original default model, `gemini-2.5-flash`, now returns
+  `404 NOT_FOUND` ("no longer available to new users") for this key.
+  Google's error response names `gemini-3.6-flash` as the replacement;
+  tested directly (both plain and structured-output `generateContent`
+  calls) and confirmed working, so `GEMINI_MODEL`'s default was updated
+  to `gemini-3.6-flash`. `TavilySearchProvider` and
+  `FirecrawlExtractionProvider` (Phase 3) were tested live at the same
+  time and both worked exactly as written, no changes needed. `LLM_PROVIDER`/
+  `SEARCH_PROVIDER`/`EXTRACTION_PROVIDER` still default to `fixture` so the
+  product remains fully functional and demo-able with zero credentials;
+  this update only concerns what happens when live mode is deliberately
+  enabled.
 - **Risk:** storing `score_weights` as `jsonb` instead of individual
   columns trades a small amount of DB-level queryability (you can't filter
   campaigns by a specific weight in SQL) for avoiding 8 rarely-touched

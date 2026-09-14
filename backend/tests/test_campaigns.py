@@ -149,13 +149,11 @@ class TestCampaignCrud:
     def test_editing_an_approved_campaign_reverts_status_to_draft(
         self, client: TestClient, fake_supabase: FakeSupabaseClient
     ) -> None:
-        created = _create_campaign(client, user=USER_A)
-        headers = auth_header(**USER_A)
-        client.patch(
-            f"/api/campaigns/{created['id']}",
-            json={"icp": {"industries": ["Design agencies"], "locations": ["Dubai, UAE"]}},
-            headers=headers,
+        created = _create_campaign(
+            client, user=USER_A, brief="Find design agencies in Dubai, UAE with 5-50 employees."
         )
+        headers = auth_header(**USER_A)
+        client.post(f"/api/campaigns/{created['id']}/plan", headers=headers)
         confirmed = client.post(f"/api/campaigns/{created['id']}/confirm-plan", headers=headers)
         assert confirmed.json()["status"] == "plan_approved"
 

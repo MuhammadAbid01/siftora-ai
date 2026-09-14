@@ -24,8 +24,14 @@ class Settings(BaseSettings):
     # is fully functional without any LLM credentials. Live Gemini is opt-in.
     llm_provider: Literal["fixture", "gemini"] = "fixture"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
     plan_generation_max_attempts: int = 2
+
+    # Same zero-cost-by-default pattern as llm_provider (plan.md §21).
+    search_provider: Literal["fixture", "tavily"] = "fixture"
+    tavily_api_key: str | None = None
+    extraction_provider: Literal["fixture", "firecrawl"] = "fixture"
+    firecrawl_api_key: str | None = None
 
     @field_validator("supabase_service_role_key", "supabase_jwt_secret")
     @classmethod
@@ -38,6 +44,20 @@ class Settings(BaseSettings):
     def _require_gemini_key_when_selected(self) -> "Settings":
         if self.llm_provider == "gemini" and not (self.gemini_api_key or "").strip():
             raise ValueError("gemini_api_key is required when llm_provider is 'gemini'")
+        return self
+
+    @model_validator(mode="after")
+    def _require_search_key_when_selected(self) -> "Settings":
+        if self.search_provider == "tavily" and not (self.tavily_api_key or "").strip():
+            raise ValueError("tavily_api_key is required when search_provider is 'tavily'")
+        return self
+
+    @model_validator(mode="after")
+    def _require_extraction_key_when_selected(self) -> "Settings":
+        if self.extraction_provider == "firecrawl" and not (self.firecrawl_api_key or "").strip():
+            raise ValueError(
+                "firecrawl_api_key is required when extraction_provider is 'firecrawl'"
+            )
         return self
 
     @property

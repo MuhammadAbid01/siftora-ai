@@ -4,8 +4,9 @@ ownership logic without a live Supabase project.
 
 Not a general-purpose fake: it implements only the operations
 app/database.py actually calls (insert/select/update/delete with eq/lt/in_/
-order/limit), plus the table-specific column defaults the real Postgres
-schema (supabase/migrations/0002_campaigns.sql) applies on insert.
+order/limit, single-row and bulk insert), plus the table-specific column
+defaults the real Postgres schema (supabase/migrations/000{2,3}_*.sql)
+applies on insert.
 """
 
 import itertools
@@ -57,8 +58,84 @@ _CAMPAIGN_ICP_DEFAULTS: dict[str, Any] = {
     "target_roles": [],
 }
 
-_TABLE_DEFAULTS = {"campaigns": _CAMPAIGN_DEFAULTS, "campaign_icp": _CAMPAIGN_ICP_DEFAULTS}
-_TABLE_KEY_COLUMN = {"campaigns": "id", "campaign_icp": "campaign_id"}
+_COMPANY_DEFAULTS: dict[str, Any] = {
+    "facts": {},
+    "verified_at": None,
+}
+
+_CAMPAIGN_RUN_DEFAULTS: dict[str, Any] = {
+    "status": "queued",
+    "stop_reason": None,
+    "pause_requested": False,
+    "queries_used": 0,
+    "leads_created": 0,
+    "qualified_count": 0,
+    "needs_review_count": 0,
+    "rejected_count": 0,
+    "failed_count": 0,
+    "estimated_cost_usd": 0,
+    "error": None,
+    "completed_at": None,
+}
+
+_LEAD_DEFAULTS: dict[str, Any] = {
+    "decision_reason": None,
+}
+
+_LEAD_EVIDENCE_DEFAULTS: dict[str, Any] = {
+    "excerpt": None,
+    "source_url": None,
+    "confidence": None,
+}
+
+_AGENT_EVENT_DEFAULTS: dict[str, Any] = {
+    "duration_ms": None,
+    "error": None,
+}
+
+_TOOL_CALL_DEFAULTS: dict[str, Any] = {
+    "latency_ms": None,
+    "cost_usd": None,
+}
+
+_TABLE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "campaigns": _CAMPAIGN_DEFAULTS,
+    "campaign_icp": _CAMPAIGN_ICP_DEFAULTS,
+    "companies": _COMPANY_DEFAULTS,
+    "campaign_runs": _CAMPAIGN_RUN_DEFAULTS,
+    "leads": _LEAD_DEFAULTS,
+    "lead_evidence": _LEAD_EVIDENCE_DEFAULTS,
+    "score_breakdowns": {},
+    "agent_events": _AGENT_EVENT_DEFAULTS,
+    "tool_calls": _TOOL_CALL_DEFAULTS,
+}
+
+# The column used as this fake's in-memory dict key for each table. Tables
+# with a natural non-"id" primary key (campaign_icp) are keyed on that;
+# everything else is keyed on an auto-generated "id".
+_TABLE_KEY_COLUMN: dict[str, str] = {
+    "campaigns": "id",
+    "campaign_icp": "campaign_id",
+    "companies": "id",
+    "campaign_runs": "id",
+    "leads": "id",
+    "lead_evidence": "id",
+    "score_breakdowns": "id",
+    "agent_events": "id",
+    "tool_calls": "id",
+}
+
+# Extra columns (beyond created_at/updated_at) that get the insert-time
+# "now" value when not explicitly provided.
+_NOW_DEFAULTED_EXTRA_COLUMNS: dict[str, list[str]] = {
+    "campaign_runs": ["started_at"],
+}
+
+# Append-only tables with no `updated_at` column in the real schema (no
+# update trigger in the migrations) — the fake must not invent one, or a
+# router bug that accidentally serializes a raw DB row (extra fields and
+# all) could pass against the fake but fail against real Postgres.
+_NO_UPDATED_AT_TABLES = {"lead_evidence", "score_breakdowns", "agent_events", "tool_calls"}
 
 Op = Literal["select", "insert", "update", "delete"]
 
@@ -74,7 +151,7 @@ class FakeQuery:
         table: dict[str, dict[str, Any]],
         table_name: str,
         op: Op,
-        payload: dict[str, Any] | None = None,
+        payload: dict[str, Any] | list[dict[str, Any]] | None = None,
     ):
         self._table = table
         self._table_name = table_name
@@ -127,17 +204,27 @@ class FakeQuery:
             return self._execute_delete()
         raise NotImplementedError(self._op)
 
-    def _execute_insert(self) -> FakeResult:
-        assert self._payload is not None
-        row = {**_TABLE_DEFAULTS.get(self._table_name, {}), **self._payload}
+    def _insert_one(self, payload: dict[str, Any]) -> dict[str, Any]:
+        row = {**_TABLE_DEFAULTS.get(self._table_name, {}), **payload}
         now = _next_timestamp()
         row.setdefault("created_at", now)
-        row.setdefault("updated_at", now)
-        if self._table_name == "campaigns":
-            row.setdefault("id", str(uuid.uuid4()))
+        if self._table_name not in _NO_UPDATED_AT_TABLES:
+            row.setdefault("updated_at", now)
+        for column in _NOW_DEFAULTED_EXTRA_COLUMNS.get(self._table_name, []):
+            row.setdefault(column, now)
+
         key_column = _TABLE_KEY_COLUMN[self._table_name]
+        if key_column == "id":
+            row.setdefault("id", str(uuid.uuid4()))
+
         self._table[row[key_column]] = row
-        return FakeResult([dict(row)])
+        return dict(row)
+
+    def _execute_insert(self) -> FakeResult:
+        assert self._payload is not None
+        if isinstance(self._payload, list):
+            return FakeResult([self._insert_one(item) for item in self._payload])
+        return FakeResult([self._insert_one(self._payload)])
 
     def _execute_select(self) -> FakeResult:
         rows = [dict(row) for row in self._table.values() if self._matches(row)]
@@ -148,7 +235,7 @@ class FakeQuery:
         return FakeResult(rows)
 
     def _execute_update(self) -> FakeResult:
-        assert self._payload is not None
+        assert isinstance(self._payload, dict)
         updated = []
         for row in self._table.values():
             if self._matches(row):
@@ -170,7 +257,7 @@ class FakeTable:
         self._table = table
         self._name = name
 
-    def insert(self, payload: dict[str, Any]) -> FakeQuery:
+    def insert(self, payload: dict[str, Any] | list[dict[str, Any]]) -> FakeQuery:
         return FakeQuery(self._table, self._name, "insert", payload)
 
     def select(self, *_columns: str) -> FakeQuery:

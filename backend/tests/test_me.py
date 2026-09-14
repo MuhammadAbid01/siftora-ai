@@ -1,11 +1,8 @@
-from datetime import UTC, datetime, timedelta
-
-import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
 from app.routers import me as me_router
+from tests.helpers import make_token as _make_token
 
 
 class _FakeQuery:
@@ -36,19 +33,6 @@ class _FakeSupabaseClient:
 
     def table(self, _name: str) -> _FakeQuery:
         return _FakeQuery(self._rows)
-
-
-def _make_token(*, sub: str, email: str) -> str:
-    settings = get_settings()
-    now = datetime.now(UTC)
-    payload = {
-        "sub": sub,
-        "email": email,
-        "aud": "authenticated",
-        "iat": now,
-        "exp": now + timedelta(minutes=5),
-    }
-    return jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
 
 
 def test_me_without_token_is_unauthorized(client: TestClient) -> None:

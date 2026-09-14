@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import campaigns, health, me
+from app.routers import campaigns, health, leads, me, runs
 from app.schemas import ErrorDetail, ErrorResponse
 
 settings = get_settings()
@@ -46,3 +46,5 @@ async def validation_exception_handler(
 app.include_router(health.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
 app.include_router(campaigns.router, prefix="/api")
+app.include_router(leads.router, prefix="/api")
+app.include_router(runs.router, prefix="/api")
