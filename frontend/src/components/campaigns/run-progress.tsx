@@ -9,26 +9,30 @@ import {
   type CampaignRunResponse,
 } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/cn";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "paused"]);
 
-const RUN_STATUS_STYLES: Record<string, string> = {
-  queued: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  running: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  failed: "bg-red-50 text-red-700 border-red-200",
-  paused: "bg-amber-50 text-amber-800 border-amber-200",
+const RUN_STATUS_VARIANTS: Record<string, BadgeProps["variant"]> = {
+  queued: "brand",
+  running: "brand",
+  completed: "success",
+  failed: "danger",
+  paused: "warning",
 };
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
     <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="text-lg font-semibold text-slate-900">{value}</dd>
+      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+        {value}
+      </dd>
     </div>
   );
 }
@@ -117,7 +121,7 @@ export function RunProgress({
   };
 
   if (loading) {
-    return <div className="h-32 w-full animate-pulse rounded-lg bg-slate-200" />;
+    return <Skeleton className="h-32 w-full" />;
   }
 
   if (!progress) {
@@ -125,19 +129,17 @@ export function RunProgress({
   }
 
   return (
-    <Card>
+    <Card className="motion-safe:animate-fade-in">
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle>Run progress</CardTitle>
           <div className="flex items-center gap-3">
-            <span
-              className={cn(
-                "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                RUN_STATUS_STYLES[progress.status],
-              )}
+            <Badge
+              variant={RUN_STATUS_VARIANTS[progress.status]}
+              dot={ACTIVE_RUN_STATUSES.has(progress.status)}
             >
               {progress.status}
-            </span>
+            </Badge>
             {ACTIVE_RUN_STATUSES.has(progress.status) && (
               <Button
                 size="sm"
@@ -162,17 +164,19 @@ export function RunProgress({
           <Stat label="Est. cost" value={`$${progress.estimated_cost_usd.toFixed(2)}`} />
         </dl>
         {progress.stop_reason && (
-          <p className="mt-4 text-sm text-slate-500">Stopped: {progress.stop_reason}</p>
+          <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+            Stopped: {progress.stop_reason}
+          </p>
         )}
         {progress.error && (
-          <p role="alert" className="mt-2 text-sm text-red-600">
+          <Alert className="mt-3" variant="error">
             {progress.error}
-          </p>
+          </Alert>
         )}
         {error && (
-          <p role="alert" className="mt-2 text-sm text-red-600">
+          <Alert className="mt-3" variant="error">
             {error}
-          </p>
+          </Alert>
         )}
       </CardContent>
     </Card>

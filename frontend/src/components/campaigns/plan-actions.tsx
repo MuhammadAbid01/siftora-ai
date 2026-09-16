@@ -4,6 +4,7 @@ import { useState } from "react";
 import { apiPost, ApiError } from "@/lib/api-client";
 import { campaignResponseSchema, type CampaignResponse } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 export function PlanActions({
@@ -40,6 +41,14 @@ export function PlanActions({
       if (err instanceof ApiError && err.code === "icp_incomplete") {
         const missingFields = (err.details?.missing_fields as string[] | undefined) ?? [];
         onIcpIncomplete(missingFields);
+        setError(err.message);
+      } else if (
+        err instanceof ApiError &&
+        (err.code === "plan_generation_failed" || err.code === "plan_provider_unavailable")
+      ) {
+        // The API already phrases these for the user (retry vs. add more
+        // detail to the brief) — show that, never the raw provider error,
+        // which stays in `details.reason` and the backend logs.
         setError(err.message);
       } else {
         setError(err instanceof ApiError ? err.message : "That action could not be completed.");
@@ -80,11 +89,7 @@ export function PlanActions({
           {pendingAction === "run" ? "Starting..." : "Start run"}
         </Button>
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-red-600">
-          {error}
-        </p>
-      )}
+      {error && <Alert>{error}</Alert>}
     </div>
   );
 }

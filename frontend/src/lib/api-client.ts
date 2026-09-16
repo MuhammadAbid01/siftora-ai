@@ -57,7 +57,10 @@ async function request<Schema extends z.ZodTypeAny>(
         response.status,
         parsedError.data.error.code,
         parsedError.data.error.message,
-        parsedError.data.error.details,
+        // The wire format uses `null` for "no extra detail"; ApiError
+        // exposes it as `undefined` so callers can use plain optional
+        // chaining (`err.details?.missing_fields`).
+        parsedError.data.error.details ?? undefined,
       );
     }
     throw new ApiError(response.status, "unknown_error", "An unexpected error occurred.");

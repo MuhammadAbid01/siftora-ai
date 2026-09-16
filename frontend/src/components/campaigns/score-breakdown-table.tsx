@@ -20,7 +20,7 @@ export function ScoreBreakdownTable({ breakdown }: { breakdown: ScoreBreakdownIt
           <CardTitle>Score breakdown</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-slate-500">This lead was never scored.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">This lead was never scored.</p>
         </CardContent>
       </Card>
     );
@@ -34,7 +34,7 @@ export function ScoreBreakdownTable({ breakdown }: { breakdown: ScoreBreakdownIt
       <CardContent>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="text-slate-500">
+            <thead className="text-xs tracking-wide text-slate-400 uppercase dark:text-slate-500">
               <tr>
                 <th className="pb-2 font-medium">Criterion</th>
                 <th className="pb-2 font-medium">Rating</th>
@@ -42,15 +42,21 @@ export function ScoreBreakdownTable({ breakdown }: { breakdown: ScoreBreakdownIt
                 <th className="pb-2 font-medium">Points</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {breakdown.map((item) => (
-                <tr key={item.criterion} className="border-t border-slate-100">
-                  <td className="py-2 text-slate-900">
+                <tr key={item.criterion}>
+                  <td className="py-2.5 text-slate-900 dark:text-slate-100">
                     {CRITERION_LABELS[item.criterion] ?? item.criterion}
                   </td>
-                  <td className="py-2 text-slate-700">{item.rating.toFixed(2)}</td>
-                  <td className="py-2 text-slate-700">{item.weight}</td>
-                  <td className="py-2 text-slate-700">{item.points.toFixed(2)}</td>
+                  <td className="py-2.5 text-slate-700 tabular-nums dark:text-slate-300">
+                    {item.rating.toFixed(2)}
+                  </td>
+                  <td className="py-2.5 text-slate-700 tabular-nums dark:text-slate-300">
+                    {item.weight}
+                  </td>
+                  <td className="py-2.5 font-medium text-slate-900 tabular-nums dark:text-slate-100">
+                    {item.points.toFixed(2)}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -217,3 +217,42 @@ class TestEditGuard:
 
         assert edited.status_code == 200
         assert edited.json()["status"] == "draft"
+
+    def test_confirm_plan_after_pause_is_not_blocked(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        """A paused run has already stopped for good (no true resume — see
+        specs/phase-3-research.md), so unlike `queued`/`running` it must not
+        leave the campaign permanently stuck: confirm-plan (and edit/delete)
+        need to work again afterward, same as for `completed`/`failed`.
+        """
+        from app import database
+
+        headers = auth_header(**USER)
+        campaign = _create_approved_campaign(client, "Find design agencies in Dubai, UAE.")
+        database.update_campaign(
+            user_id=USER["sub"], campaign_id=campaign["id"], patch={"status": "paused"}
+        )
+
+        response = client.post(f"/api/campaigns/{campaign['id']}/confirm-plan", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "plan_approved"
+
+    def test_patch_after_pause_reverts_to_draft(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        from app import database
+
+        headers = auth_header(**USER)
+        campaign = _create_approved_campaign(client, "Find design agencies in Dubai, UAE.")
+        database.update_campaign(
+            user_id=USER["sub"], campaign_id=campaign["id"], patch={"status": "paused"}
+        )
+
+        edited = client.patch(
+            f"/api/campaigns/{campaign['id']}", json={"offer": "changed"}, headers=headers
+        )
+
+        assert edited.status_code == 200
+        assert edited.json()["status"] == "draft"

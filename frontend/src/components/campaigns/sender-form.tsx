@@ -7,6 +7,7 @@ import { senderFormSchema, type SenderFormValues } from "@/lib/validation/campai
 import { apiPatch, ApiError } from "@/lib/api-client";
 import { campaignResponseSchema, type CampaignResponse } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,7 +64,7 @@ export function SenderForm({
         <CardTitle>Sender details</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="mb-4 text-sm text-slate-600">
+        <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
           Used as the signoff on generated outreach drafts.
         </p>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
@@ -83,15 +84,11 @@ export function SenderForm({
             </div>
           </div>
           {errors.sender_email && (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
               {errors.sender_email.message}
             </p>
           )}
-          {serverError && (
-            <p role="alert" className="text-sm text-red-600">
-              {serverError}
-            </p>
-          )}
+          {serverError && <Alert>{serverError}</Alert>}
           <Button type="submit" variant="secondary" size="sm" disabled={isSubmitting}>
             {isSubmitting ? "Saving..." : "Save sender details"}
           </Button>

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app import database, outreach
 from app.deps import CurrentUser, get_current_user
 from app.providers import LanguageModelProvider, get_language_model_provider
+from app.rate_limit import rate_limiter
 from app.schemas import (
     ApprovalResponse,
     CompanySummary,
@@ -251,7 +252,10 @@ async def update_lead_status(
 
 
 @router.post(
-    "/leads/{lead_id}/regenerate-outreach", response_model=ApprovalResponse, status_code=201
+    "/leads/{lead_id}/regenerate-outreach",
+    response_model=ApprovalResponse,
+    status_code=201,
+    dependencies=[Depends(rate_limiter("regenerate_outreach", max_requests=20, window_seconds=60))],
 )
 async def regenerate_outreach(
     lead_id: str,

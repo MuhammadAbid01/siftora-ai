@@ -21,10 +21,28 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:3000"
 
     # Defaults to the zero-cost fixture adapter (plan.md §21) so the product
-    # is fully functional without any LLM credentials. Live Gemini is opt-in.
-    llm_provider: Literal["fixture", "gemini"] = "fixture"
-    gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.1-flash-lite"
+    # is fully functional without any LLM credentials. Live OpenRouter is
+    # opt-in; the default model is a free-tier OpenRouter model so enabling
+    # it costs nothing either.
+    llm_provider: Literal["fixture", "openrouter"] = "fixture"
+    openrouter_api_key: str | None = None
+    # The previous default (`nvidia/nemotron-3-ultra-550b-a55b:free`) is a
+    # 550B reasoning model whose free tier reliably exceeded its own upstream
+    # 300s limit on a full planning prompt, so OpenRouter answered with a
+    # 504 error envelope and /plan could never succeed. This model answers
+    # the same prompt in seconds and still costs nothing.
+    openrouter_model: str = "nvidia/nemotron-3.5-lightning:free"
+    # Free-tier models are slow and queue behind a shared pool; the old
+    # hard-coded 30s client timeout aborted responses that were still on
+    # their way. Configurable so a fast paid model can lower it.
+    openrouter_timeout_seconds: float = 180.0
+    # Every call this app makes is structured extraction against a fixed
+    # schema, which chain-of-thought does not improve. Leaving reasoning on
+    # spent ~99% of the completion budget on reasoning tokens (3,613 of
+    # 3,634 on a measured planning call) and made "Generate plan" take
+    # ~105s instead of ~17s. Set to False only if a model is found that
+    # genuinely needs reasoning to produce schema-valid output.
+    openrouter_disable_reasoning: bool = True
     plan_generation_max_attempts: int = 2
 
     # Same zero-cost-by-default pattern as llm_provider (plan.md §21).
@@ -45,9 +63,9 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def _require_gemini_key_when_selected(self) -> "Settings":
-        if self.llm_provider == "gemini" and not (self.gemini_api_key or "").strip():
-            raise ValueError("gemini_api_key is required when llm_provider is 'gemini'")
+    def _require_openrouter_key_when_selected(self) -> "Settings":
+        if self.llm_provider == "openrouter" and not (self.openrouter_api_key or "").strip():
+            raise ValueError("openrouter_api_key is required when llm_provider is 'openrouter'")
         return self
 
     @model_validator(mode="after")

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { apiGet, ApiError } from "@/lib/api-client";
 import { campaignResponseSchema, type CampaignResponse } from "@/lib/types/api";
 import { CampaignDetail } from "@/components/campaigns/campaign-detail";
+import { Alert } from "@/components/ui/alert";
 
 export const metadata: Metadata = {
   title: "Campaign",
@@ -35,14 +36,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   } = await supabase.auth.getSession();
 
   if (!session) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        Your session could not be verified. Please sign in again.
-      </div>
-    );
+    return <Alert>Your session could not be verified. Please sign in again.</Alert>;
   }
 
   const result = await loadCampaign(id, session.access_token);
@@ -52,14 +46,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   }
 
   if ("errorMessage" in result) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        {result.errorMessage}
-      </div>
-    );
+    return <Alert>{result.errorMessage}</Alert>;
   }
 
   return <CampaignDetail initialCampaign={result.campaign} />;

@@ -10,7 +10,9 @@ import {
   type ToolCallResponse,
 } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/cn";
 
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
@@ -84,11 +86,7 @@ export function EventTimeline({
   }, [fetchTimeline, campaignStatus]);
 
   if (error) {
-    return (
-      <p role="alert" className="text-sm text-red-600">
-        {error}
-      </p>
-    );
+    return <Alert>{error}</Alert>;
   }
 
   if (!items || items.length === 0) {
@@ -96,28 +94,43 @@ export function EventTimeline({
   }
 
   return (
-    <Card>
+    <Card className="motion-safe:animate-fade-in">
       <CardHeader>
         <CardTitle>Activity</CardTitle>
       </CardHeader>
       <CardContent>
-        <ol className="max-h-96 space-y-2 overflow-y-auto text-sm">
+        <ol className="max-h-96 space-y-1 overflow-y-auto text-sm">
           {items.map((item) => (
             <li
               key={`${item.kind}-${item.data.id}`}
-              className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2 last:border-0"
+              className="flex items-start justify-between gap-3 rounded-md px-2 py-2 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800"
             >
-              <div>
-                <span className="font-mono text-xs text-slate-400">
-                  {item.kind === "event"
-                    ? item.data.node
-                    : `${item.data.tool} (${item.data.provider})`}
-                </span>
-                <p className={item.data.status === "error" ? "text-red-600" : "text-slate-700"}>
-                  {item.data.summary}
-                </p>
+              <div className="flex items-start gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "mt-1.5 size-1.5 shrink-0 rounded-full",
+                    item.data.status === "error" ? "bg-red-500" : "bg-emerald-500",
+                  )}
+                />
+                <div>
+                  <span className="font-mono text-xs text-slate-400 dark:text-slate-500">
+                    {item.kind === "event"
+                      ? item.data.node
+                      : `${item.data.tool} (${item.data.provider})`}
+                  </span>
+                  <p
+                    className={
+                      item.data.status === "error"
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-slate-700 dark:text-slate-300"
+                    }
+                  >
+                    {item.data.summary}
+                  </p>
+                </div>
               </div>
-              <span className="shrink-0 text-xs text-slate-400">
+              <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
                 {new Date(item.at).toLocaleTimeString()}
               </span>
             </li>

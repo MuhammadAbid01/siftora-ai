@@ -44,7 +44,7 @@ export function UpdatePasswordForm() {
           {...register("password")}
         />
         {errors.password && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
             {errors.password.message}
           </p>
         )}
@@ -58,13 +58,13 @@ export function UpdatePasswordForm() {
           {...register("confirmPassword")}
         />
         {errors.confirmPassword && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
             {errors.confirmPassword.message}
           </p>
         )}
       </div>
       {serverError && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
           {serverError}
         </p>
       )}

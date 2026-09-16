@@ -1,4 +1,4 @@
-import { cn } from "@/lib/cn";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import type { QualityStatus } from "@/lib/types/api";
 
 const STATUS_LABELS: Record<QualityStatus, string> = {
@@ -6,20 +6,11 @@ const STATUS_LABELS: Record<QualityStatus, string> = {
   needs_review: "Needs review",
 };
 
-const STATUS_STYLES: Record<QualityStatus, string> = {
-  passed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  needs_review: "bg-red-50 text-red-700 border-red-200",
+const STATUS_VARIANTS: Record<QualityStatus, BadgeProps["variant"]> = {
+  passed: "success",
+  needs_review: "danger",
 };
 
 export function QualityStatusBadge({ status }: { status: QualityStatus }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        STATUS_STYLES[status],
-      )}
-    >
-      {STATUS_LABELS[status]}
-    </span>
-  );
+  return <Badge variant={STATUS_VARIANTS[status]}>{STATUS_LABELS[status]}</Badge>;
 }

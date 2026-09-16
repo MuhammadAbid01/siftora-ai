@@ -115,6 +115,10 @@ _SUPPRESSION_ENTRY_DEFAULTS: dict[str, Any] = {
     "reason": None,
 }
 
+_PROFILE_DEFAULTS: dict[str, Any] = {
+    "role": "user",
+}
+
 _TABLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "campaigns": _CAMPAIGN_DEFAULTS,
     "campaign_icp": _CAMPAIGN_ICP_DEFAULTS,
@@ -128,6 +132,7 @@ _TABLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "outreach_drafts": _OUTREACH_DRAFT_DEFAULTS,
     "approvals": _APPROVAL_DEFAULTS,
     "suppression_entries": _SUPPRESSION_ENTRY_DEFAULTS,
+    "profiles": _PROFILE_DEFAULTS,
 }
 
 # The column used as this fake's in-memory dict key for each table. Tables
@@ -146,6 +151,7 @@ _TABLE_KEY_COLUMN: dict[str, str] = {
     "outreach_drafts": "id",
     "approvals": "id",
     "suppression_entries": "id",
+    "profiles": "id",
 }
 
 # Extra columns (beyond created_at/updated_at) that get the insert-time

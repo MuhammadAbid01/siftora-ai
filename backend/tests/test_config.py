@@ -47,26 +47,26 @@ def test_settings_defaults_to_fixture_llm_provider(monkeypatch: pytest.MonkeyPat
     assert settings.llm_provider == "fixture"
 
 
-def test_settings_raises_when_gemini_selected_without_api_key(
+def test_settings_raises_when_openrouter_selected_without_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "key")
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "secret")
-    monkeypatch.setenv("LLM_PROVIDER", "gemini")
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
 
 
-def test_settings_accepts_gemini_with_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_accepts_openrouter_with_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "key")
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "secret")
-    monkeypatch.setenv("LLM_PROVIDER", "gemini")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
-    assert settings.llm_provider == "gemini"
+    assert settings.llm_provider == "openrouter"

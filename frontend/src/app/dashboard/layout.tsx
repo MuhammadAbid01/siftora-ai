@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { DashboardNav } from "@/components/dashboard/dashboard-nav";
+import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import { MobileNavProvider } from "@/components/dashboard/mobile-nav-context";
+import { SidebarProvider } from "@/components/dashboard/sidebar-context";
+import { DensityProvider } from "@/lib/density/density-provider";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const supabase = await createClient();
@@ -14,9 +17,12 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   }
 
   return (
-    <div className="flex min-h-full flex-1 flex-col bg-slate-50">
-      <DashboardNav email={user.email ?? ""} />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 sm:px-6">{children}</main>
-    </div>
+    <DensityProvider>
+      <SidebarProvider>
+        <MobileNavProvider>
+          <DashboardShell email={user.email ?? ""}>{children}</DashboardShell>
+        </MobileNavProvider>
+      </SidebarProvider>
+    </DensityProvider>
   );
 }

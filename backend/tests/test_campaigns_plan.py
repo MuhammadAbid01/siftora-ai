@@ -3,7 +3,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.providers import LLMOutputError, get_language_model_provider
+from app.providers import LLMOutputError, LLMUnavailableError, get_language_model_provider
+from app.schemas import ICP, PlanExtraction, SearchPlanQuery
 from tests.fakes.supabase_fake import FakeSupabaseClient
 from tests.helpers import auth_header
 
@@ -67,8 +68,120 @@ class TestPlanGeneration:
             app.dependency_overrides.pop(get_language_model_provider, None)
 
         assert response.status_code == 502
-        assert response.json()["error"]["code"] == "plan_generation_failed"
+        body = response.json()["error"]
+        assert body["code"] == "plan_generation_failed"
         assert attempts == 2  # settings.plan_generation_max_attempts default
+        # The user gets actionable guidance, not a raw exception; the
+        # technical cause is still reported, just not as the headline.
+        assert "simulated malformed output" not in body["message"]
+        assert "add" in body["message"].lower()
+        assert "simulated malformed output" in body["details"]["reason"]
+
+    def test_provider_outage_is_a_503_not_a_bad_brief(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        """A rate limit or upstream timeout must not be reported to the user
+        as "your brief couldn't be parsed" — the brief is fine, the model is
+        simply unreachable, and retrying is the right advice.
+        """
+        created = _create_campaign(client, "Find design agencies in Dubai.")
+
+        class UnavailableProvider:
+            async def generate_campaign_plan(self, **_kwargs: Any) -> None:
+                raise LLMUnavailableError(
+                    "OpenRouter reported an upstream error (code 504): A Timeout Occurred"
+                )
+
+        app.dependency_overrides[get_language_model_provider] = lambda: UnavailableProvider()
+        try:
+            response = client.post(
+                f"/api/campaigns/{created['id']}/plan", headers=auth_header(**USER)
+            )
+        finally:
+            app.dependency_overrides.pop(get_language_model_provider, None)
+
+        assert response.status_code == 503
+        body = response.json()["error"]
+        assert body["code"] == "plan_provider_unavailable"
+        assert "try again" in body["message"].lower()
+        assert "A Timeout Occurred" in body["details"]["reason"]
+
+    def test_a_complete_icp_without_a_search_plan_still_yields_an_approvable_plan(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        """A model can return a usable ICP but forget the search plan. Left
+        alone that strands the campaign: confirm-plan requires both, so the
+        user could never move forward. The plan is derived from the ICP the
+        model did return, inventing no new targeting.
+        """
+        created = _create_campaign(client, "Find design agencies in Dubai.")
+
+        class NoSearchPlanProvider:
+            async def generate_campaign_plan(self, **_kwargs: Any) -> PlanExtraction:
+                return PlanExtraction(
+                    icp=ICP(industries=["Design agencies"], locations=["Dubai, UAE"]),
+                    search_plan=[],
+                )
+
+        app.dependency_overrides[get_language_model_provider] = lambda: NoSearchPlanProvider()
+        try:
+            response = client.post(
+                f"/api/campaigns/{created['id']}/plan", headers=auth_header(**USER)
+            )
+        finally:
+            app.dependency_overrides.pop(get_language_model_provider, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "awaiting_plan_approval"
+        assert body["search_plan"]
+        assert "Design agencies" in body["search_plan"][0]["query"]
+        assert "Dubai, UAE" in body["search_plan"][0]["query"]
+
+        confirm = client.post(
+            f"/api/campaigns/{created['id']}/confirm-plan", headers=auth_header(**USER)
+        )
+        assert confirm.status_code == 200
+
+    def test_every_extracted_icp_field_reaches_the_response(
+        self, client: TestClient, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        """The generated plan must land in every corresponding form field,
+        not just industries/locations.
+        """
+        created = _create_campaign(client, "Find design agencies in Dubai.")
+
+        class RichProvider:
+            async def generate_campaign_plan(self, **_kwargs: Any) -> PlanExtraction:
+                return PlanExtraction(
+                    icp=ICP(
+                        industries=["Design agencies"],
+                        locations=["Dubai, UAE"],
+                        company_size_min=5,
+                        company_size_max=50,
+                        signals=["Active website"],
+                        exclusions=["Recruitment agencies"],
+                        target_roles=["Founder"],
+                    ),
+                    search_plan=[SearchPlanQuery(query="q", rationale="r")],
+                )
+
+        app.dependency_overrides[get_language_model_provider] = lambda: RichProvider()
+        try:
+            response = client.post(
+                f"/api/campaigns/{created['id']}/plan", headers=auth_header(**USER)
+            )
+        finally:
+            app.dependency_overrides.pop(get_language_model_provider, None)
+
+        icp = response.json()["icp"]
+        assert icp["industries"] == ["Design agencies"]
+        assert icp["locations"] == ["Dubai, UAE"]
+        assert icp["company_size_min"] == 5
+        assert icp["company_size_max"] == 50
+        assert icp["signals"] == ["Active website"]
+        assert icp["exclusions"] == ["Recruitment agencies"]
+        assert icp["target_roles"] == ["Founder"]
 
 
 class TestConfirmPlan:

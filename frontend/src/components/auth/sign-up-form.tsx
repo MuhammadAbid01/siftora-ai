@@ -47,7 +47,7 @@ export function SignUpForm() {
 
   if (confirmationSent) {
     return (
-      <p role="status" className="text-sm text-slate-600">
+      <p role="status" className="text-sm text-slate-600 dark:text-slate-400">
         Check your email to confirm your account before signing in.
       </p>
     );
@@ -59,7 +59,7 @@ export function SignUpForm() {
         <Label htmlFor="email">Email</Label>
         <Input id="email" type="email" autoComplete="email" {...register("email")} />
         {errors.email && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
             {errors.email.message}
           </p>
         )}
@@ -73,13 +73,13 @@ export function SignUpForm() {
           {...register("password")}
         />
         {errors.password && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
             {errors.password.message}
           </p>
         )}
       </div>
       {serverError && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
           {serverError}
         </p>
       )}

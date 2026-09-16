@@ -11,6 +11,13 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class ReadinessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "error"]
+    database: Literal["ok", "unreachable"]
+
+
 class ProfileResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -336,10 +343,39 @@ class CompanyAnalysis(BaseModel):
 class SearchResultItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    company_name: str
+    # The *page* title and host of a search hit — a source on which companies
+    # may be mentioned, NOT a company identity. Named `title`, not
+    # `company_name`, so that using a search hit as a company is a visible
+    # mistake rather than a plausible-looking one; `app/discovery.py`
+    # explains the bug that naming cost us.
+    title: str
     domain: str
     url: str
     snippet: str
+
+
+class DiscoveredCompany(BaseModel):
+    """One real business named in the content of a source page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    website: str | None = None
+
+
+class PageEntityExtraction(BaseModel):
+    """The structured output requested from
+    `LanguageModelProvider.extract_companies_from_page`.
+
+    `page_type` distinguishes a company's own site (the page *is* one
+    business) from a listing/roundup that merely mentions several, which is
+    what decides whether the page's own domain may become a lead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    page_type: Literal["company_site", "listing", "other"]
+    companies: list[DiscoveredCompany] = []
 
 
 class ExtractedPage(BaseModel):
@@ -614,3 +650,56 @@ class SuppressionListResponse(BaseModel):
 
 
 LeadDetailResponse.model_rebuild()
+
+
+# --- Evaluation harness + analytics (Phase 5) ----------------------------
+
+
+class EvalCaseResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    passed: bool
+    detail: str | None = None
+
+
+class EvalCategoryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    total: int
+    passed: int
+    pass_rate: float
+    cases: list[EvalCaseResult]
+
+
+class EvalReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    categories: list[EvalCategoryResult]
+    overall_pass_rate: float
+    provider_mode: dict[str, str]
+
+
+class DemoResetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted_campaigns: int
+
+
+class CampaignAnalyticsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    campaign_id: str
+    qualified_count: int
+    needs_review_count: int
+    rejected_count: int
+    drafts_generated: int
+    drafts_approved: int
+    drafts_rejected: int
+    total_cost_usd: float
+    total_queries_used: int
+    avg_tool_latency_ms: float | None
+    tool_call_failures: int
+    agent_event_failures: int
+    runs_count: int

@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from app import agent, database
+from app import agent, database, discovery
 from app.schemas import ScoreWeights
 from tests.fakes.supabase_fake import FakeSupabaseClient
 
@@ -148,7 +148,14 @@ class TestFullRun:
 
     async def test_budget_exhausted_stops_the_run(self, fake_supabase: FakeSupabaseClient) -> None:
         campaign, run = _setup(
-            fake_supabase, target_lead_count=100, max_cost_usd=0.03, search_plan=FULL_SEARCH_PLAN
+            # Enough budget to reach at least one lead, not enough to finish
+            # the plan. Reading a source page and naming the companies on it
+            # now costs a search + an extraction + an entity extraction before
+            # the first candidate is even analyzed.
+            fake_supabase,
+            target_lead_count=100,
+            max_cost_usd=0.08,
+            search_plan=FULL_SEARCH_PLAN,
         )
         state = _build_state(campaign, run, FULL_SEARCH_PLAN)
 
@@ -157,7 +164,9 @@ class TestFullRun:
         finished_run = database.get_campaign_run(run_id=run["id"])
         assert finished_run is not None
         assert finished_run["stop_reason"] == "budget_exhausted"
-        assert finished_run["leads_created"] == 1
+        # Partial results survive the stop (FR-12).
+        assert finished_run["leads_created"] >= 1
+        assert finished_run["leads_created"] < 100
 
     async def test_pause_requested_stops_before_processing_anything(
         self, fake_supabase: FakeSupabaseClient
@@ -199,7 +208,10 @@ class TestCrossRunDedup:
     async def test_same_company_across_two_campaigns_shares_one_company_row(
         self, fake_supabase: FakeSupabaseClient
     ) -> None:
-        query = [FULL_SEARCH_PLAN[1]]  # "Animation studios in Dubai, UAE" -> Northbeam only
+        # "Animation studios in Dubai, UAE" -> Northbeam directly, plus the
+        # listicle/Wikipedia source pages, which name Northbeam again (deduped)
+        # and Vantage Motion (a genuinely new company).
+        query = [FULL_SEARCH_PLAN[1]]
 
         campaign_a, run_a = _setup(
             fake_supabase,
@@ -220,11 +232,13 @@ class TestCrossRunDedup:
 
         leads_a, _ = database.list_leads(campaign_id=campaign_a["id"], limit=10, cursor=None)
         leads_b, _ = database.list_leads(campaign_id=campaign_b["id"], limit=10, cursor=None)
-        assert len(leads_a) == 1
-        assert len(leads_b) == 1
-        assert leads_a[0]["company_id"] == company["id"]
-        assert leads_b[0]["company_id"] == company["id"]
-        assert leads_a[0]["id"] != leads_b[0]["id"]
+
+        def northbeam(leads: list[dict[str, Any]]) -> dict[str, Any]:
+            return next(lead for lead in leads if lead["company_id"] == company["id"])
+
+        # One company row shared by both campaigns, one lead each.
+        assert len(leads_a) == len(leads_b)
+        assert northbeam(leads_a)["id"] != northbeam(leads_b)["id"]
 
     async def test_rerunning_the_same_campaign_does_not_duplicate_the_lead(
         self, fake_supabase: FakeSupabaseClient
@@ -237,7 +251,15 @@ class TestCrossRunDedup:
         await agent.run_research(_build_state(campaign, run_2, query))
 
         leads, _ = database.list_leads(campaign_id=campaign["id"], limit=10, cursor=None)
-        assert len(leads) == 1  # merged, not duplicated (AC-6)
+        after_first_run = len(leads)
+        assert after_first_run > 0
+
+        # Re-running adds nothing: every company is merged into its existing
+        # lead rather than duplicated (AC-6).
+        run_3 = database.create_campaign_run(campaign_id=campaign["id"], config_snapshot={})
+        await agent.run_research(_build_state(campaign, run_3, query))
+        leads, _ = database.list_leads(campaign_id=campaign["id"], limit=10, cursor=None)
+        assert len(leads) == after_first_run
 
 
 class TestScoringDeterminism:
@@ -257,3 +279,129 @@ class TestScoringDeterminism:
         }
         results = [compute_score(signals, weights).total for _ in range(5)]
         assert len(set(results)) == 1
+
+
+class TestUrlSafetyGate:
+    async def test_unsafe_candidate_url_is_rejected_without_attempting_extraction(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        campaign, run = _setup(fake_supabase, search_plan=[])
+        state = _build_state(campaign, run, [])
+        state["current_candidate"] = {
+            "company_name": "Metadata Snooper",
+            "domain": "169.254.169.254",
+            "url": "http://169.254.169.254/latest/meta-data/",
+            "source_query": "q",
+        }
+
+        patch = await agent.analyze_candidate(state)
+
+        assert patch["rejected_count"] == 1
+        assert patch["failed_count"] == 1
+        lead = database.get_lead_by_campaign_and_company(
+            campaign_id=campaign["id"],
+            company_id=database.get_company_by_domain(domain="169.254.169.254")["id"],
+        )
+        assert lead is not None
+        assert lead["status"] == "rejected"
+        assert lead["decision_reason"] == "unsafe_url"
+
+    async def test_safe_candidate_url_is_unaffected(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        campaign, run = _setup(fake_supabase, search_plan=[])
+        state = _build_state(campaign, run, [])
+        state["current_candidate"] = {
+            "company_name": "Northbeam Studio",
+            "domain": "northbeamstudio.example",
+            "url": "https://northbeamstudio.example",
+            "source_query": "q",
+        }
+
+        patch = await agent.analyze_candidate(state)
+
+        assert "current_analysis" in patch
+        assert patch["current_analysis"] is not None
+
+
+class TestLeadIdentityComesFromEntitiesNotSources:
+    """Regression tests for the "listicles and reference pages become leads" bug.
+
+    The fixture search deliberately returns two non-company source pages
+    alongside the real company sites: a roundup on `agencyroundup.example`
+    and a Wikipedia article. Neither may ever become a lead; both must be
+    mined for the companies they name.
+    """
+
+    async def _run(self, fake_supabase: FakeSupabaseClient) -> list[dict[str, Any]]:
+        query = [{"query": "Animation studios in Dubai, UAE", "rationale": "r"}]
+        campaign, run = _setup(fake_supabase, target_lead_count=20, search_plan=query)
+        await agent.run_research(_build_state(campaign, run, query))
+
+        leads, _ = database.list_leads(campaign_id=campaign["id"], limit=50, cursor=None)
+        companies = database.get_companies_by_ids([lead["company_id"] for lead in leads])
+        return [{**lead, "company": companies[lead["company_id"]]} for lead in leads]
+
+    async def test_listicle_and_wikipedia_pages_never_become_leads(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        leads = await self._run(fake_supabase)
+        domains = {lead["company"]["domain"] for lead in leads}
+
+        assert "agencyroundup.example" not in domains
+        assert "en.wikipedia.org" not in domains
+        assert not any(discovery.is_non_company_domain(d) for d in domains)
+
+    async def test_no_lead_is_named_after_a_page_title(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        leads = await self._run(fake_supabase)
+        names = [lead["company"]["name"] for lead in leads]
+
+        assert names, "expected at least one lead"
+        for name in names:
+            assert discovery.is_valid_company_name(name), f"{name!r} is not a company name"
+        assert "The 12 Best Animation Studios in Dubai (2026 Rankings)" not in names
+        assert "Animation in the United Arab Emirates - Wikipedia" not in names
+
+    async def test_companies_named_inside_a_listicle_become_their_own_leads(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        leads = await self._run(fake_supabase)
+        by_domain = {lead["company"]["domain"]: lead for lead in leads}
+
+        # Vantage Motion is reachable ONLY through the roundup page for this
+        # query — the old code would have produced the roundup itself instead.
+        assert "vantagemotion.example" in by_domain
+        assert by_domain["vantagemotion.example"]["company"]["name"] == "Vantage Motion Co."
+        # The lead points at the company's own site, not the roundup.
+        assert "agencyroundup.example" not in by_domain["vantagemotion.example"]["source_url"]
+
+    async def test_the_listicle_is_recorded_as_an_evidence_source(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        leads = await self._run(fake_supabase)
+        by_domain = {lead["company"]["domain"]: lead for lead in leads}
+
+        evidence = database.list_lead_evidence(lead_id=by_domain["vantagemotion.example"]["id"])
+        source_urls = {e.get("source_url") for e in evidence}
+        assert any(url and "agencyroundup.example" in url for url in source_urls)
+
+    async def test_a_company_found_on_several_sources_is_one_lead_with_merged_evidence(
+        self, fake_supabase: FakeSupabaseClient
+    ) -> None:
+        leads = await self._run(fake_supabase)
+        northbeam = [
+            lead for lead in leads if lead["company"]["domain"] == "northbeamstudio.example"
+        ]
+
+        # Northbeam appears on its own site, in the roundup AND on Wikipedia.
+        assert len(northbeam) == 1, "the same company must not become several leads"
+
+        evidence = database.list_lead_evidence(lead_id=northbeam[0]["id"])
+        merged_sources = {
+            e.get("source_url")
+            for e in evidence
+            if e.get("source_url") and "northbeamstudio.example" not in e["source_url"]
+        }
+        assert merged_sources, "repeat discoveries should be merged in as extra evidence"

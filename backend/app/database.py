@@ -22,6 +22,14 @@ TOOL_CALLS_TABLE = "tool_calls"
 OUTREACH_DRAFTS_TABLE = "outreach_drafts"
 APPROVALS_TABLE = "approvals"
 SUPPRESSION_ENTRIES_TABLE = "suppression_entries"
+PROFILES_TABLE = "profiles"
+
+
+def get_profile(*, user_id: str) -> dict[str, Any] | None:
+    client = get_supabase_admin_client()
+    result = client.table(PROFILES_TABLE).select("*").eq("id", user_id).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
 
 
 def create_campaign(
@@ -236,6 +244,16 @@ def get_latest_campaign_run(*, campaign_id: str) -> dict[str, Any] | None:
     )
     rows = result.data or []
     return rows[0] if rows else None
+
+
+def list_campaign_runs(*, campaign_id: str) -> list[dict[str, Any]]:
+    """Every run attempt for a campaign, not just the latest — used by
+    analytics (specs/phase-5-hardening.md FR-6) to aggregate cost/queries
+    across a campaign that's been run more than once.
+    """
+    client = get_supabase_admin_client()
+    result = client.table(CAMPAIGN_RUNS_TABLE).select("*").eq("campaign_id", campaign_id).execute()
+    return result.data or []
 
 
 def update_campaign_run(*, run_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
@@ -465,6 +483,25 @@ def list_tool_calls(
     rows = query.execute().data or []
     next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
     return rows, next_cursor
+
+
+def list_tool_calls_for_runs(*, run_ids: list[str]) -> list[dict[str, Any]]:
+    """Unpaginated, across every run — used by analytics (FR-6) to compute
+    cumulative latency/failure counts for a campaign.
+    """
+    if not run_ids:
+        return []
+    client = get_supabase_admin_client()
+    result = client.table(TOOL_CALLS_TABLE).select("*").in_("run_id", run_ids).execute()
+    return result.data or []
+
+
+def list_agent_events_for_runs(*, run_ids: list[str]) -> list[dict[str, Any]]:
+    if not run_ids:
+        return []
+    client = get_supabase_admin_client()
+    result = client.table(AGENT_EVENTS_TABLE).select("*").in_("run_id", run_ids).execute()
+    return result.data or []
 
 
 # --- Outreach drafts + approvals (Phase 4) -------------------------------

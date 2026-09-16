@@ -10,6 +10,7 @@ from fastapi import Depends, Header, HTTPException
 from jwt.algorithms import ECAlgorithm, RSAAlgorithm
 from pydantic import BaseModel
 
+from app import database
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -114,3 +115,24 @@ async def get_current_user(
         raise _unauthorized("Token missing required claims")
 
     return CurrentUser(id=user_id, email=email)
+
+
+async def get_current_admin_user(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CurrentUser:
+    """Gates admin-only actions (plan.md §7: "Admin — inspect system
+    health, usage, cost, and provider failures"). There is no self-service
+    admin sign-up (plan.md's Roles section defines none) — an operator
+    promotes a user by setting `profiles.role = 'admin'` directly (see
+    docs/security.md).
+    """
+    profile = database.get_profile(user_id=current_user.id)
+    if profile is None or profile.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "admin_required",
+                "message": "This action requires an admin account.",
+            },
+        )
+    return current_user

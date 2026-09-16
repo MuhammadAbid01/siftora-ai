@@ -6,6 +6,7 @@ import { approvalResponseSchema, type ApprovalResponse } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
 import { ApprovalStatusBadge } from "@/components/campaigns/approval-status-badge";
 import { QualityStatusBadge } from "@/components/campaigns/quality-status-badge";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -103,7 +104,7 @@ export function OutreachDraftCard({
   };
 
   return (
-    <Card>
+    <Card className="motion-safe:animate-fade-in">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>
@@ -147,9 +148,13 @@ export function OutreachDraftCard({
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-900">{approval.draft.subject}</p>
-            <p className="whitespace-pre-line text-sm text-slate-700">{approval.draft.body}</p>
+          <div className="space-y-2 rounded-lg border border-slate-100 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+              {approval.draft.subject}
+            </p>
+            <p className="text-sm whitespace-pre-line text-slate-700 dark:text-slate-300">
+              {approval.draft.body}
+            </p>
           </div>
         )}
 
@@ -164,7 +169,7 @@ export function OutreachDraftCard({
             </Button>
             <Button
               size="sm"
-              variant="secondary"
+              variant="outline"
               onClick={() => void handleReject()}
               disabled={busy !== null || approval.status === "rejected"}
             >
@@ -181,11 +186,7 @@ export function OutreachDraftCard({
           </div>
         )}
 
-        {error && (
-          <p role="alert" className="text-sm text-red-600">
-            {error}
-          </p>
-        )}
+        {error && <Alert>{error}</Alert>}
       </CardContent>
     </Card>
   );

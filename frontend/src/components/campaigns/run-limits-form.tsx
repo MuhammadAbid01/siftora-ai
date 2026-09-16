@@ -7,6 +7,7 @@ import { runLimitsFormSchema, type RunLimitsFormValues } from "@/lib/validation/
 import { apiPatch, ApiError } from "@/lib/api-client";
 import { campaignResponseSchema, type CampaignResponse, type RunLimits } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -96,11 +97,7 @@ export function RunLimitsForm({
               />
             </div>
           </div>
-          {serverError && (
-            <p role="alert" className="text-sm text-red-600">
-              {serverError}
-            </p>
-          )}
+          {serverError && <Alert>{serverError}</Alert>}
           <Button type="submit" variant="secondary" size="sm" disabled={isSubmitting}>
             {isSubmitting ? "Saving..." : "Save limits"}
           </Button>

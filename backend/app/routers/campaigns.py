@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -9,9 +10,16 @@ from pydantic import ValidationError
 from app import agent, database
 from app.config import Settings, get_settings
 from app.deps import CurrentUser, get_current_user
-from app.providers import LanguageModelProvider, LLMOutputError, get_language_model_provider
+from app.providers import (
+    LanguageModelProvider,
+    LLMOutputError,
+    LLMUnavailableError,
+    get_language_model_provider,
+)
+from app.rate_limit import rate_limiter
 from app.schemas import (
     ICP,
+    CampaignAnalyticsResponse,
     CampaignCreateRequest,
     CampaignListResponse,
     CampaignResponse,
@@ -24,17 +32,24 @@ from app.schemas import (
     SearchPlanQuery,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 # Editing one of these reverts the campaign to `draft` (Phase 2 behavior,
-# extended to `completed`/`failed` — re-running after a finished run
-# requires re-approval too, same as a first-time run).
-_REVERT_ON_EDIT_STATUSES = {"plan_approved", "completed", "failed"}
-# A run is queued/in-flight/paused for these — editing would change config
-# out from under it (plan.md §10, "immutable for a run"). See
+# extended to `completed`/`failed`/`paused` — re-running after a finished
+# (or user-paused) run requires re-approval too, same as a first-time run).
+_REVERT_ON_EDIT_STATUSES = {"plan_approved", "completed", "failed", "paused"}
+# Only while a run is actually queued/in-flight is editing blocked —
+# changing config out from under a live run would corrupt it (plan.md §10,
+# "immutable for a run"). `paused` is NOT here: by the time a run reaches
+# `paused` it has already stopped for good (pause is a clean stop, not a
+# checkpoint — specs/phase-3-research.md's "no true resume" risk note), so
+# it must be treated like `completed`/`failed` or the campaign would be
+# stuck forever with no way to confirm-plan, edit, or run again. See
 # specs/phase-3-research.md FR-2 for why this differs from Phase 2, which
 # put `queued` in the revert set above instead.
-_BLOCKED_FROM_EDIT_STATUSES = {"queued", "running", "paused"}
+_BLOCKED_FROM_EDIT_STATUSES = {"queued", "running"}
 
 
 def _not_found() -> HTTPException:
@@ -250,7 +265,11 @@ async def delete_campaign(
     return DeleteResponse(deleted=True)
 
 
-@router.post("/{campaign_id}/plan", response_model=CampaignResponse)
+@router.post(
+    "/{campaign_id}/plan",
+    response_model=CampaignResponse,
+    dependencies=[Depends(rate_limiter("plan", max_requests=10, window_seconds=60))],
+)
 async def generate_plan(
     campaign_id: str,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -262,7 +281,8 @@ async def generate_plan(
 
     extraction = None
     last_error: Exception | None = None
-    for _attempt in range(settings.plan_generation_max_attempts):
+    provider_unavailable = False
+    for attempt in range(settings.plan_generation_max_attempts):
         try:
             extraction = await provider.generate_campaign_plan(
                 brief=campaign["brief"],
@@ -270,16 +290,61 @@ async def generate_plan(
                 target_lead_count=campaign["target_lead_count"],
             )
             break
+        except LLMUnavailableError as exc:
+            # The provider itself failed (timeout, rate limit, upstream
+            # error). There was no output to repair, so this is worth
+            # another attempt — and it must not be reported to the user as
+            # "your brief couldn't be parsed", which is what the single
+            # generic 502 used to do.
+            last_error, provider_unavailable = exc, True
+            logger.warning(
+                "Plan generation attempt %d/%d unavailable for campaign %s: %s",
+                attempt + 1,
+                settings.plan_generation_max_attempts,
+                campaign_id,
+                exc,
+            )
         except (LLMOutputError, ValidationError) as exc:
-            last_error = exc
+            last_error, provider_unavailable = exc, False
+            logger.warning(
+                "Plan generation attempt %d/%d returned unusable output for campaign %s: %s",
+                attempt + 1,
+                settings.plan_generation_max_attempts,
+                campaign_id,
+                exc,
+            )
 
     if extraction is None:
+        logger.error(
+            "Plan generation failed for campaign %s after %d attempt(s): %s",
+            campaign_id,
+            settings.plan_generation_max_attempts,
+            last_error,
+        )
+        if provider_unavailable:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "plan_provider_unavailable",
+                    "message": (
+                        "The planning model is not responding right now. Nothing about "
+                        "your campaign has changed — please try again in a moment."
+                    ),
+                    # The technical cause is reported, not swallowed, but it
+                    # is kept out of the headline message shown to the user.
+                    "details": {"reason": str(last_error)},
+                },
+            )
         raise HTTPException(
             status_code=502,
             detail={
                 "code": "plan_generation_failed",
-                "message": f"The language model did not return a usable plan after "
-                f"{settings.plan_generation_max_attempts} attempt(s): {last_error}",
+                "message": (
+                    "We couldn't turn this brief into a plan. Try adding a bit more "
+                    "detail — for example the type of company you're targeting and the "
+                    "city or country they're in — then generate the plan again."
+                ),
+                "details": {"reason": str(last_error)},
             },
         )
 
@@ -309,13 +374,35 @@ async def generate_plan(
             },
         )
 
+    # A model can return a complete ICP but forget the search plan. The ICP
+    # alone can't be approved (confirm-plan requires both), which would
+    # strand the campaign with no way forward, so derive a plain
+    # industry × location plan from what was actually extracted. This
+    # invents no new targeting information — only phrasings of fields the
+    # model already returned.
+    search_plan = list(extraction.search_plan)
+    if not search_plan:
+        search_plan = [
+            SearchPlanQuery(
+                query=f"{industry} in {location}",
+                rationale="Derived from the extracted industry and location.",
+            )
+            for industry in extraction.icp.industries[:3]
+            for location in extraction.icp.locations[:2]
+        ]
+        logger.info(
+            "Model returned no search plan for campaign %s; derived %d quer(ies) from the ICP.",
+            campaign_id,
+            len(search_plan),
+        )
+
     database.update_campaign(
         user_id=current_user.id,
         campaign_id=campaign_id,
         patch={
             "status": "awaiting_plan_approval",
             "plan_approved_at": None,
-            "search_plan": [q.model_dump() for q in extraction.search_plan],
+            "search_plan": [q.model_dump() for q in search_plan],
         },
     )
 
@@ -366,7 +453,11 @@ async def confirm_plan(
     return _row_to_response(updated_row, icp_row)
 
 
-@router.post("/{campaign_id}/run", response_model=CampaignResponse)
+@router.post(
+    "/{campaign_id}/run",
+    response_model=CampaignResponse,
+    dependencies=[Depends(rate_limiter("run", max_requests=5, window_seconds=60))],
+)
 async def run_campaign(
     campaign_id: str,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -468,6 +559,72 @@ async def get_progress(
         )
 
     return _run_row_to_response(run)
+
+
+@router.get("/{campaign_id}/analytics", response_model=CampaignAnalyticsResponse)
+async def get_analytics(
+    campaign_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CampaignAnalyticsResponse:
+    """Funnel/cost/latency/failure aggregation across every run of this
+    campaign (specs/phase-5-hardening.md FR-6) — a campaign run more than
+    once shows cumulative numbers, not just the latest run's (see that
+    spec's Risks for why).
+    """
+    _get_owned_campaign_or_404(user_id=current_user.id, campaign_id=campaign_id)
+
+    runs = database.list_campaign_runs(campaign_id=campaign_id)
+    if not runs:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_run_yet", "message": "This campaign has not been run yet."},
+        )
+
+    leads, _cursor = database.list_leads(campaign_id=campaign_id, limit=1000, cursor=None)
+    qualified_count = sum(1 for lead in leads if lead["status"] == "qualified")
+    needs_review_count = sum(1 for lead in leads if lead["status"] == "needs_review")
+    rejected_count = sum(1 for lead in leads if lead["status"] == "rejected")
+
+    drafts_generated = 0
+    drafts_approved = 0
+    drafts_rejected = 0
+    for lead in leads:
+        for draft in database.list_outreach_drafts_by_lead(lead_id=lead["id"]):
+            drafts_generated += 1
+            approval = database.get_approval_by_draft(draft_id=draft["id"])
+            if approval is not None and approval["status"] == "approved":
+                drafts_approved += 1
+            elif approval is not None and approval["status"] == "rejected":
+                drafts_rejected += 1
+
+    total_cost_usd = round(sum(float(r["estimated_cost_usd"]) for r in runs), 2)
+    total_queries_used = sum(r["queries_used"] for r in runs)
+
+    run_ids = [r["id"] for r in runs]
+    tool_calls = database.list_tool_calls_for_runs(run_ids=run_ids)
+    agent_events = database.list_agent_events_for_runs(run_ids=run_ids)
+
+    latencies = [tc["latency_ms"] for tc in tool_calls if tc.get("latency_ms") is not None]
+    avg_tool_latency_ms = (sum(latencies) / len(latencies)) if latencies else None
+
+    tool_call_failures = sum(1 for tc in tool_calls if tc["status"] == "error")
+    agent_event_failures = sum(1 for ev in agent_events if ev["status"] == "error")
+
+    return CampaignAnalyticsResponse(
+        campaign_id=campaign_id,
+        qualified_count=qualified_count,
+        needs_review_count=needs_review_count,
+        rejected_count=rejected_count,
+        drafts_generated=drafts_generated,
+        drafts_approved=drafts_approved,
+        drafts_rejected=drafts_rejected,
+        total_cost_usd=total_cost_usd,
+        total_queries_used=total_queries_used,
+        avg_tool_latency_ms=avg_tool_latency_ms,
+        tool_call_failures=tool_call_failures,
+        agent_event_failures=agent_event_failures,
+        runs_count=len(runs),
+    )
 
 
 _EXPORT_FIELDNAMES = [

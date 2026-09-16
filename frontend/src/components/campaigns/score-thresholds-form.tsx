@@ -14,6 +14,7 @@ import {
   type ScoreThresholds,
 } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -89,15 +90,11 @@ export function ScoreThresholdsForm({
             </div>
           </div>
           {errors.needs_review_min && (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
               {errors.needs_review_min.message}
             </p>
           )}
-          {serverError && (
-            <p role="alert" className="text-sm text-red-600">
-              {serverError}
-            </p>
-          )}
+          {serverError && <Alert>{serverError}</Alert>}
           <Button type="submit" variant="secondary" size="sm" disabled={isSubmitting}>
             {isSubmitting ? "Saving..." : "Save thresholds"}
           </Button>

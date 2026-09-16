@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { apiGet, ApiError } from "@/lib/api-client";
 import { leadListResponseSchema, type LeadSummaryResponse } from "@/lib/types/api";
 import { LeadList } from "@/components/campaigns/lead-list";
+import { Alert } from "@/components/ui/alert";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export const metadata: Metadata = {
   title: "Leads",
@@ -37,45 +39,32 @@ export default async function LeadsPage({ params }: { params: Promise<{ id: stri
   } = await supabase.auth.getSession();
 
   if (!session) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        Your session could not be verified. Please sign in again.
-      </div>
-    );
+    return <Alert>Your session could not be verified. Please sign in again.</Alert>;
   }
 
   const result = await loadLeads(id, session.access_token);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Leads</h1>
-          <Link
-            href={`/dashboard/campaigns/${id}`}
-            className="text-sm text-indigo-600 hover:text-indigo-500"
-          >
-            Back to campaign
-          </Link>
-        </div>
+    <div className="space-y-6 motion-safe:animate-fade-in">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          Leads
+        </h1>
+        <Link
+          href={`/dashboard/campaigns/${id}`}
+          className="text-sm text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300"
+        >
+          Back to campaign
+        </Link>
       </div>
 
-      {"errorMessage" in result && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-        >
-          {result.errorMessage}
-        </div>
-      )}
+      {"errorMessage" in result && <Alert>{result.errorMessage}</Alert>}
 
       {"leads" in result && result.leads.length === 0 && (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-          No leads yet. Start a run from the campaign page to discover some.
-        </div>
+        <EmptyState
+          title="No leads yet"
+          description="Start a run from the campaign page to discover some."
+        />
       )}
 
       {"leads" in result && result.leads.length > 0 && (

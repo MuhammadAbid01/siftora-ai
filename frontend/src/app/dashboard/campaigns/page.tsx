@@ -3,7 +3,8 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { apiGet, ApiError } from "@/lib/api-client";
 import { campaignListResponseSchema, type CampaignResponse } from "@/lib/types/api";
-import { CampaignList } from "@/components/campaigns/campaign-list";
+import { CampaignsBrowser } from "@/components/campaigns/campaigns-browser";
+import { Alert } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -33,52 +34,25 @@ export default async function CampaignsPage() {
   } = await supabase.auth.getSession();
 
   if (!session) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        Your session could not be verified. Please sign in again.
-      </div>
-    );
+    return <Alert>Your session could not be verified. Please sign in again.</Alert>;
   }
 
   const result = await loadCampaigns(session.access_token);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 motion-safe:animate-fade-in">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-900">Campaigns</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          Campaigns
+        </h1>
         <Link href="/dashboard/campaigns/new" className={cn(buttonVariants({ size: "sm" }))}>
           New campaign
         </Link>
       </div>
 
-      {"errorMessage" in result && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-        >
-          {result.errorMessage}
-        </div>
-      )}
+      {"errorMessage" in result && <Alert>{result.errorMessage}</Alert>}
 
-      {"campaigns" in result && result.campaigns.length === 0 && (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-          No campaigns yet.{" "}
-          <Link
-            href="/dashboard/campaigns/new"
-            className="font-medium text-indigo-600 hover:text-indigo-500"
-          >
-            Create your first one
-          </Link>
-          .
-        </div>
-      )}
-
-      {"campaigns" in result && result.campaigns.length > 0 && (
-        <CampaignList campaigns={result.campaigns} />
-      )}
+      {"campaigns" in result && <CampaignsBrowser campaigns={result.campaigns} />}
     </div>
   );
 }

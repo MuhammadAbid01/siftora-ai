@@ -7,10 +7,12 @@ import { scoreWeightsFormSchema, type ScoreWeightsFormValues } from "@/lib/valid
 import { apiPatch, ApiError } from "@/lib/api-client";
 import { campaignResponseSchema, type CampaignResponse, type ScoreWeights } from "@/lib/types/api";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/cn";
 
 const WEIGHT_FIELDS: { key: keyof ScoreWeightsFormValues; label: string }[] = [
   { key: "industry_fit", label: "Industry fit" },
@@ -84,24 +86,34 @@ export function ScoreWeightsForm({
               </div>
             ))}
           </div>
-          <p
-            role="status"
-            className={
-              total === 100 ? "text-sm text-slate-600" : "text-sm font-medium text-red-600"
-            }
-          >
-            Total: {total} / 100
-          </p>
+          <div className="flex items-center gap-3">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none",
+                  total === 100 ? "bg-emerald-500" : "bg-amber-500",
+                )}
+                style={{ width: `${Math.min(total, 100)}%` }}
+              />
+            </div>
+            <p
+              role="status"
+              className={cn(
+                "shrink-0 text-sm font-medium tabular-nums",
+                total === 100
+                  ? "text-slate-600 dark:text-slate-400"
+                  : "text-amber-700 dark:text-amber-400",
+              )}
+            >
+              {total} / 100
+            </p>
+          </div>
           {errors.industry_fit && (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
               {errors.industry_fit.message}
             </p>
           )}
-          {serverError && (
-            <p role="alert" className="text-sm text-red-600">
-              {serverError}
-            </p>
-          )}
+          {serverError && <Alert>{serverError}</Alert>}
           <Button
             type="submit"
             variant="secondary"

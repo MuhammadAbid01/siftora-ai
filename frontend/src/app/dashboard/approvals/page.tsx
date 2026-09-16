@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { apiGet, ApiError } from "@/lib/api-client";
 import { approvalListResponseSchema, type ApprovalResponse } from "@/lib/types/api";
 import { ApprovalQueue } from "@/components/campaigns/approval-queue";
+import { Alert } from "@/components/ui/alert";
 
 export const metadata: Metadata = {
   title: "Approvals",
@@ -34,35 +35,23 @@ export default async function ApprovalsPage() {
   } = await supabase.auth.getSession();
 
   if (!session) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        Your session could not be verified. Please sign in again.
-      </div>
-    );
+    return <Alert>Your session could not be verified. Please sign in again.</Alert>;
   }
 
   const result = await loadApprovals(session.access_token);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 motion-safe:animate-fade-in">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Approvals</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          Approvals
+        </h1>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
           Drafts awaiting your review, across every campaign.
         </p>
       </div>
 
-      {"errorMessage" in result && (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-        >
-          {result.errorMessage}
-        </div>
-      )}
+      {"errorMessage" in result && <Alert>{result.errorMessage}</Alert>}
 
       {"approvals" in result && <ApprovalQueue initialApprovals={result.approvals} />}
     </div>

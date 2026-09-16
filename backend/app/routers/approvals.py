@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app import database
 from app.deps import CurrentUser, get_current_user
 from app.providers import EmailProvider, get_email_provider
+from app.rate_limit import rate_limiter
 from app.routers.leads import approval_to_response
 from app.schemas import (
     ApprovalDraftEditRequest,
@@ -167,7 +168,11 @@ async def edit_draft(
     return approval_to_response(updated_approval, updated_draft, lead, company)
 
 
-@router.post("/{approval_id}/send", response_model=EmailSendResult)
+@router.post(
+    "/{approval_id}/send",
+    response_model=EmailSendResult,
+    dependencies=[Depends(rate_limiter("send", max_requests=20, window_seconds=60))],
+)
 async def send(
     approval_id: str,
     body: ApprovalSendRequest,

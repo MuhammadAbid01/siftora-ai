@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { env } from "@/lib/env";
 import { getAccessToken } from "@/lib/supabase/access-token";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 export function ExportButton({ campaignId }: { campaignId: string }) {
@@ -54,9 +55,9 @@ export function ExportButton({ campaignId }: { campaignId: string }) {
         {exporting ? "Exporting..." : "Export approved (CSV)"}
       </Button>
       {error && (
-        <p role="alert" className="mt-2 text-sm text-red-600">
+        <Alert className="mt-2" variant="error">
           {error}
-        </p>
+        </Alert>
       )}
     </div>
   );

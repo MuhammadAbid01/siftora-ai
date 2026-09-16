@@ -8,6 +8,7 @@ import {
   type LeadDetailWithApprovalsResponse,
 } from "@/lib/types/api";
 import { LeadDetail } from "@/components/campaigns/lead-detail";
+import { Alert } from "@/components/ui/alert";
 
 export const metadata: Metadata = {
   title: "Lead",
@@ -46,14 +47,7 @@ export default async function LeadDetailPage({
   } = await supabase.auth.getSession();
 
   if (!session) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        Your session could not be verified. Please sign in again.
-      </div>
-    );
+    return <Alert>Your session could not be verified. Please sign in again.</Alert>;
   }
 
   const result = await loadLead(leadId, session.access_token);
@@ -63,21 +57,14 @@ export default async function LeadDetailPage({
   }
 
   if ("errorMessage" in result) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700"
-      >
-        {result.errorMessage}
-      </div>
-    );
+    return <Alert>{result.errorMessage}</Alert>;
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 motion-safe:animate-fade-in">
       <Link
         href={`/dashboard/campaigns/${id}/leads`}
-        className="text-sm text-indigo-600 hover:text-indigo-500"
+        className="text-sm text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300"
       >
         Back to leads
       </Link>

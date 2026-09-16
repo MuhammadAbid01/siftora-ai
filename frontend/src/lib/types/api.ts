@@ -9,6 +9,12 @@ export const healthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
+export const readinessResponseSchema = z.object({
+  status: z.enum(["ok", "error"]),
+  database: z.enum(["ok", "unreachable"]),
+});
+export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
+
 export const profileResponseSchema = z.object({
   id: z.string(),
   email: z.string().email(),
@@ -22,7 +28,14 @@ export const apiErrorResponseSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
-    details: z.record(z.string(), z.unknown()).optional(),
+    // `.nullable()` matters: the backend serializes ErrorDetail with
+    // `model_dump()`, so `details` is always present and is `null` — not
+    // absent — whenever an error carries no extra detail. A bare
+    // `.optional()` accepts `undefined` but rejects `null`, which made
+    // EVERY detail-less error (no_run_yet, campaign_not_found,
+    // plan_incomplete, ...) fail to parse; api-client then discarded the
+    // real code and message and reported "An unexpected error occurred."
+    details: z.record(z.string(), z.unknown()).nullable().optional(),
   }),
 });
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
@@ -327,3 +340,52 @@ export const suppressionListResponseSchema = z.object({
   next_cursor: z.string().nullable().optional(),
 });
 export type SuppressionListResponse = z.infer<typeof suppressionListResponseSchema>;
+
+// --- Evaluation harness + analytics (Phase 5) ----------------------------
+// Mirrors backend/app/schemas.py eval/analytics models — see
+// specs/phase-5-hardening.md, "Frontend" section.
+
+export const evalCaseResultSchema = z.object({
+  name: z.string(),
+  passed: z.boolean(),
+  detail: z.string().nullable().optional(),
+});
+export type EvalCaseResult = z.infer<typeof evalCaseResultSchema>;
+
+export const evalCategoryResultSchema = z.object({
+  category: z.string(),
+  total: z.number().int(),
+  passed: z.number().int(),
+  pass_rate: z.number(),
+  cases: z.array(evalCaseResultSchema),
+});
+export type EvalCategoryResult = z.infer<typeof evalCategoryResultSchema>;
+
+export const evalReportSchema = z.object({
+  categories: z.array(evalCategoryResultSchema),
+  overall_pass_rate: z.number(),
+  provider_mode: z.record(z.string(), z.string()),
+});
+export type EvalReport = z.infer<typeof evalReportSchema>;
+
+export const campaignAnalyticsResponseSchema = z.object({
+  campaign_id: z.string(),
+  qualified_count: z.number().int(),
+  needs_review_count: z.number().int(),
+  rejected_count: z.number().int(),
+  drafts_generated: z.number().int(),
+  drafts_approved: z.number().int(),
+  drafts_rejected: z.number().int(),
+  total_cost_usd: z.number(),
+  total_queries_used: z.number().int(),
+  avg_tool_latency_ms: z.number().nullable(),
+  tool_call_failures: z.number().int(),
+  agent_event_failures: z.number().int(),
+  runs_count: z.number().int(),
+});
+export type CampaignAnalyticsResponse = z.infer<typeof campaignAnalyticsResponseSchema>;
+
+export const demoResetResponseSchema = z.object({
+  deleted_campaigns: z.number().int(),
+});
+export type DemoResetResponse = z.infer<typeof demoResetResponseSchema>;
